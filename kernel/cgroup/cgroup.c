@@ -494,6 +494,21 @@ static struct cgroup_subsys_state *cgroup_css(struct cgroup *cgrp,
 		return &cgrp->self;
 }
 
+// add by lsc, only used for swap log
+struct cgroup_subsys_state *get_cgroup_css(struct cgroup *cgrp, struct cgroup_subsys *ss) {
+    struct cgroup_subsys_state *css;
+
+    rcu_read_lock();
+    css = cgroup_css(cgrp, ss);
+    if (css && !css_tryget_online(css)) {
+        css = NULL;
+    }
+    rcu_read_unlock();
+
+    return css;
+}
+EXPORT_SYMBOL(get_cgroup_css);
+
 /**
  * cgroup_e_css_by_mask - obtain a cgroup's effective css for the specified ss
  * @cgrp: the cgroup of interest
@@ -5725,6 +5740,9 @@ fail:
 	return ret;
 }
 
+// add by lsc
+struct cgroup * swap_log_cgroup = NULL;
+
 int cgroup_mkdir(struct kernfs_node *parent_kn, const char *name, umode_t mode)
 {
 	struct cgroup *parent, *cgrp;
@@ -5775,6 +5793,11 @@ out_destroy:
 	cgroup_destroy_locked(cgrp);
 out_unlock:
 	cgroup_kn_unlock(parent_kn);
+
+	// add by lsc
+    if (strcmp(name, "swap_log") == 0)
+		swap_log_cgroup = cgrp;
+
 	return ret;
 }
 

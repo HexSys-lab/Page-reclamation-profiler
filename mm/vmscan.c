@@ -70,6 +70,11 @@
 #define CREATE_TRACE_POINTS
 #include <trace/events/vmscan.h>
 
+// add by lsc
+extern struct cgroup *swap_log_cgroup;
+struct mem_cgroup *swap_log_memcg = NULL;
+EXPORT_SYMBOL(swap_log_memcg);
+
 struct scan_control {
 	/* How many pages shrink_list() should reclaim */
 	unsigned long nr_to_reclaim;
@@ -1005,6 +1010,30 @@ static bool may_enter_fs(struct folio *folio, gfp_t gfp_mask)
 	return !data_race(folio_swap_flags(folio) & SWP_FS_OPS);
 }
 
+// add by lsc, only used for write swap log
+static void write_log_to_file(const char *log_msg)
+{
+    struct file *file;
+    loff_t pos = 0;
+    ssize_t ret;
+
+    // Open the log file
+    file = filp_open("/usr/local/swap_log.txt", O_WRONLY|O_CREAT|O_APPEND, 0644);
+    if (IS_ERR(file)) {
+        printk(KERN_ERR "Failed to open log file\n");
+        return;
+    }
+
+    // Write the log message to the file
+    ret = kernel_write(file, log_msg, strlen(log_msg), &pos);
+    if (ret < 0) {
+        printk(KERN_ERR "Failed to write to log file\n");
+    }
+
+    // Close the file
+    filp_close(file, NULL);
+}
+
 /*
  * shrink_folio_list() returns the number of reclaimed pages
  */
@@ -1418,6 +1447,25 @@ free_it:
 		 * all pages in it.
 		 */
 		nr_reclaimed += nr_pages;
+
+		// add by lsc
+		if (!swap_log_memcg && swap_log_cgroup) {
+			struct cgroup_subsys_state *swap_log_css = get_cgroup_css(swap_log_cgroup, &memory_cgrp_subsys);
+			if (swap_log_css)
+        		swap_log_memcg = container_of(swap_log_css, struct mem_cgroup, css);
+		}
+
+        if (swap_log_memcg) {
+            struct mem_cgroup *curr_folio_memcg = folio_memcg(folio);
+            if (curr_folio_memcg == swap_log_memcg) {
+            	unsigned long pfn = folio_pfn(folio);
+                // printk(KERN_INFO "swap folio: pfn = %lu, nr_pages = %u\n", pfn, nr_pages);
+				char log_msg[128];
+            	snprintf(log_msg, sizeof(log_msg), "swap folio: pfn = %lu, nr_pages = %u\n", pfn, nr_pages);
+            	write_log_to_file(log_msg);
+            }
+        }
+		// add by lsc
 
 		if (folio_test_large(folio) &&
 		    folio_test_large_rmappable(folio))
