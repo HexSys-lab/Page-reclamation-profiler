@@ -84,6 +84,15 @@
 
 #include "internal.h"
 
+//add by lsc
+#include <linux/kernel.h>
+#include <linux/hashtable.h>
+#include <linux/slab.h> 
+
+extern struct hlist_head pa_va_table[];
+int add_or_update_pa_va_mapping(unsigned long pfn, unsigned long va);
+//add by lsc end
+
 static struct kmem_cache *anon_vma_cachep;
 static struct kmem_cache *anon_vma_chain_cachep;
 
@@ -1682,6 +1691,11 @@ static bool try_to_unmap_one(struct folio *folio, struct vm_area_struct *vma,
 		pfn = pte_pfn(ptep_get(pvmw.pte));
 		subpage = folio_page(folio, pfn - folio_pfn(folio));
 		address = pvmw.address;
+
+		// add by lsc
+		(void)add_or_update_pa_va_mapping(pfn, address);
+		// add by lsc end
+
 		anon_exclusive = folio_test_anon(folio) &&
 				 PageAnonExclusive(subpage);
 

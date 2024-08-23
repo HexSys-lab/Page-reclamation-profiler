@@ -71,9 +71,72 @@
 #include <trace/events/vmscan.h>
 
 // add by lsc
+#include <linux/hashtable.h>
+#include <linux/slab.h>
+#include <linux/kernel.h>
+#define PA_VA_HASH_BITS 12
 extern struct cgroup *swap_log_cgroup;
 struct mem_cgroup *swap_log_memcg = NULL;
 EXPORT_SYMBOL(swap_log_memcg);
+
+struct pa_va_entry {
+    unsigned long pfn;
+    unsigned long va;
+    struct hlist_node hnode;
+};
+DEFINE_HASHTABLE(pa_va_table, PA_VA_HASH_BITS);
+
+int add_or_update_pa_va_mapping(unsigned long pfn, unsigned long va)
+{
+    struct pa_va_entry *entry;
+    struct pa_va_entry *tmp;
+
+    hash_for_each_possible(pa_va_table, tmp, hnode, pfn) {
+        if (tmp->pfn == pfn) {
+            tmp->va = va; // Update existing entry
+            return 0;
+        }
+    }
+
+    entry = kmalloc(sizeof(*entry), GFP_KERNEL);
+    if (!entry)
+        return -ENOMEM;
+
+    entry->pfn = pfn;
+    entry->va = va;
+    hash_add(pa_va_table, &entry->hnode, pfn);
+
+    return 0;
+}
+
+unsigned long lookup_va(unsigned long pfn)
+{
+    struct pa_va_entry *entry;
+    unsigned long va = 0;
+
+    hash_for_each_possible(pa_va_table, entry, hnode, pfn) {
+        if (entry->pfn == pfn) {
+            va = entry->va;
+            break;
+        }
+    }
+
+    return va;
+}
+
+void remove_pa_va_mapping(unsigned long pfn)
+{
+    struct pa_va_entry *entry;
+
+    hash_for_each_possible(pa_va_table, entry, hnode, pfn) {
+        if (entry->pfn == pfn) {
+            hash_del(&entry->hnode);
+            kfree(entry);
+            break;
+        }
+    }
+}
+//add by lsc end
 
 struct scan_control {
 	/* How many pages shrink_list() should reclaim */
@@ -1018,7 +1081,7 @@ static void write_log_to_file(const char *log_msg)
     ssize_t ret;
 
     // Open the log file
-    file = filp_open("/usr/local/swap_log.txt", O_WRONLY|O_CREAT|O_APPEND, 0644);
+    file = filp_open("/home/cc/swap_log.txt", O_WRONLY|O_CREAT|O_APPEND, 0666);
     if (IS_ERR(file)) {
         printk(KERN_ERR "Failed to open log file\n");
         return;
@@ -1455,17 +1518,19 @@ free_it:
         		swap_log_memcg = container_of(swap_log_css, struct mem_cgroup, css);
 		}
 
-        if (swap_log_memcg) {
+        if (swap_log_memcg && likely(folio_test_anon(folio))) {
             struct mem_cgroup *curr_folio_memcg = folio_memcg(folio);
             if (curr_folio_memcg == swap_log_memcg) {
             	unsigned long pfn = folio_pfn(folio);
+				unsigned long va = lookup_va(pfn);
                 // printk(KERN_INFO "swap folio: pfn = %lu, nr_pages = %u\n", pfn, nr_pages);
 				char log_msg[128];
-            	snprintf(log_msg, sizeof(log_msg), "swap folio: pfn = %lu, nr_pages = %u\n", pfn, nr_pages);
+            	snprintf(log_msg, sizeof(log_msg), "swap folio: pfn = %lu, va = %lu, nr_pages = %u\n", pfn, va, nr_pages);
             	write_log_to_file(log_msg);
+				remove_pa_va_mapping(pfn);
             }
         }
-		// add by lsc
+		// add by lsc end
 
 		if (folio_test_large(folio) &&
 		    folio_test_large_rmappable(folio))
