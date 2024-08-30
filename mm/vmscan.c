@@ -1518,14 +1518,14 @@ free_it:
         		swap_log_memcg = container_of(swap_log_css, struct mem_cgroup, css);
 		}
 
-        if (swap_log_memcg && likely(folio_test_anon(folio))) {
+        if (swap_log_memcg && folio_test_swapbacked(folio)) {	//don't check whether folio is anon because I guess the mapping has been cleared; hasn't been verified yet
             struct mem_cgroup *curr_folio_memcg = folio_memcg(folio);
             if (curr_folio_memcg == swap_log_memcg) {
             	unsigned long pfn = folio_pfn(folio);
 				unsigned long va = lookup_va(pfn);
                 // printk(KERN_INFO "swap folio: pfn = %lu, nr_pages = %u\n", pfn, nr_pages);
 				char log_msg[128];
-            	snprintf(log_msg, sizeof(log_msg), "swap folio: pfn = %lu, va = %lu, nr_pages = %u\n", pfn, va, nr_pages);
+            	snprintf(log_msg, sizeof(log_msg), "swap folio: pfn = %lx, va = %lx, nr_pages = %u\n", pfn, (void *)va, nr_pages);
             	write_log_to_file(log_msg);
 				remove_pa_va_mapping(pfn);
             }
