@@ -1540,7 +1540,7 @@ free_it:
 				unsigned long va = lookup_va(pfn);
                 // printk(KERN_INFO "swap folio: pfn = %lu, nr_pages = %u\n", pfn, nr_pages);
 				char log_msg[128];
-            	snprintf(log_msg, sizeof(log_msg), "swap folio: pfn = %lx, va = %lx, nr_pages = %u, NUMA node = %d\n", pfn, (void *)va, nr_pages, pfn_to_nid(pfn));
+            	snprintf(log_msg, sizeof(log_msg), "swap folio: pfn = %lx, va = %lx, nr_pages = %u, NUMA node = %d\n", pfn, va, nr_pages, pfn_to_nid(pfn));
             	write_log_to_file(log_msg);
 				remove_pa_va_mapping(pfn);
             }
