@@ -90,6 +90,7 @@
 #include <linux/slab.h> 
 
 extern struct hlist_head pa_va_table[];
+extern int enable_swap_log;
 int add_or_update_pa_va_mapping(unsigned long pfn, unsigned long va);
 //add by lsc end
 
@@ -1693,7 +1694,8 @@ static bool try_to_unmap_one(struct folio *folio, struct vm_area_struct *vma,
 		address = pvmw.address;
 
 		// add by lsc
-		(void)add_or_update_pa_va_mapping(pfn, address);
+		if (enable_swap_log)
+			(void)add_or_update_pa_va_mapping(pfn, address);
 		// add by lsc end
 
 		anon_exclusive = folio_test_anon(folio) &&
