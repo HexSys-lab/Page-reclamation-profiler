@@ -78,6 +78,8 @@
 extern struct cgroup *swap_log_cgroup;
 struct mem_cgroup *swap_log_memcg = NULL;
 EXPORT_SYMBOL(swap_log_memcg);
+int enable_swap_log = 0;
+EXPORT_SYMBOL(enable_swap_log);
 
 struct pa_va_entry {
     unsigned long pfn;
@@ -136,6 +138,19 @@ void remove_pa_va_mapping(unsigned long pfn)
         }
     }
 }
+
+void clear_pa_va_table(void)
+{
+    int bkt;
+    struct pa_va_entry *entry;
+    struct hlist_node *tmp;
+
+    hash_for_each_safe(pa_va_table, bkt, tmp, entry, hnode) {
+        hash_del(&entry->hnode);
+        kfree(entry);
+    }
+}
+EXPORT_SYMBOL(clear_pa_va_table);
 //add by lsc end
 
 struct scan_control {
@@ -1518,14 +1533,14 @@ free_it:
         		swap_log_memcg = container_of(swap_log_css, struct mem_cgroup, css);
 		}
 
-        if (swap_log_memcg && folio_test_swapbacked(folio)) {	//don't check whether folio is anon because I guess the mapping has been cleared; hasn't been verified yet
+        if (enable_swap_log && swap_log_memcg && folio_test_swapbacked(folio)) {	//don't check whether folio is anon because I guess the mapping has been cleared; hasn't been verified yet
             struct mem_cgroup *curr_folio_memcg = folio_memcg(folio);
             if (curr_folio_memcg == swap_log_memcg) {
             	unsigned long pfn = folio_pfn(folio);
 				unsigned long va = lookup_va(pfn);
                 // printk(KERN_INFO "swap folio: pfn = %lu, nr_pages = %u\n", pfn, nr_pages);
 				char log_msg[128];
-            	snprintf(log_msg, sizeof(log_msg), "swap folio: pfn = %lx, va = %lx, nr_pages = %u\n", pfn, (void *)va, nr_pages);
+            	snprintf(log_msg, sizeof(log_msg), "swap folio: pfn = %lx, va = %lx, nr_pages = %u, NUMA node = %d\n", pfn, (void *)va, nr_pages, pfn_to_nid(pfn));
             	write_log_to_file(log_msg);
 				remove_pa_va_mapping(pfn);
             }
