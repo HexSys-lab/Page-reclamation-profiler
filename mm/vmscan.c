@@ -1132,6 +1132,14 @@ static unsigned int shrink_folio_list(struct list_head *folio_list,
 	cond_resched();
 	do_demote_pass = can_demote(pgdat->node_id, sc);
 
+	// add by lsc
+	if (unlikely(!swap_log_memcg && swap_log_cgroup)) {
+		struct cgroup_subsys_state *swap_log_css = get_cgroup_css(swap_log_cgroup, &memory_cgrp_subsys);
+		if (swap_log_css)
+        	swap_log_memcg = container_of(swap_log_css, struct mem_cgroup, css);
+	}
+	// add by lsc end
+
 retry:
 	while (!list_empty(folio_list)) {
 		struct address_space *mapping;
@@ -1527,12 +1535,6 @@ free_it:
 		nr_reclaimed += nr_pages;
 
 		// add by lsc
-		if (!swap_log_memcg && swap_log_cgroup) {
-			struct cgroup_subsys_state *swap_log_css = get_cgroup_css(swap_log_cgroup, &memory_cgrp_subsys);
-			if (swap_log_css)
-        		swap_log_memcg = container_of(swap_log_css, struct mem_cgroup, css);
-		}
-
         if (enable_swap_log && swap_log_memcg && folio_test_swapbacked(folio)) {	//don't check whether folio is anon because I guess the mapping has been cleared; hasn't been verified yet
             struct mem_cgroup *curr_folio_memcg = folio_memcg(folio);
             if (curr_folio_memcg == swap_log_memcg) {
@@ -1627,6 +1629,8 @@ keep:
 
 	if (plug)
 		swap_write_unplug(plug);
+	
+	printk(KERN_INFO "Number of reclaimed pages: %u\n", nr_reclaimed);	// add by lsc, for debug
 	return nr_reclaimed;
 }
 
