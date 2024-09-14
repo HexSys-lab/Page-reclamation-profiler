@@ -1555,8 +1555,7 @@ free_it:
 
 		// add by lsc
         if (enable_swap_log && swap_log_memcg && folio_test_swapbacked(folio)) {	//don't check whether folio is anon because I guess the mapping has been cleared; hasn't been verified yet
-            struct mem_cgroup *curr_folio_memcg = folio_memcg(folio);
-            if (curr_folio_memcg == swap_log_memcg) {
+            if (folio_memcg(folio) == swap_log_memcg) {
             	unsigned long pfn = folio_pfn(folio);
 				unsigned long va = lookup_va(pfn);
                 // printk(KERN_INFO "swap folio: pfn = %lu, nr_pages = %u\n", pfn, nr_pages);

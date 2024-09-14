@@ -86,6 +86,7 @@
 
 //add by lsc
 extern int enable_swap_log;
+extern struct mem_cgroup *swap_log_memcg;
 extern int add_or_update_pa_va_mapping(unsigned long pfn, unsigned long va);
 //add by lsc end
 
@@ -1689,9 +1690,10 @@ static bool try_to_unmap_one(struct folio *folio, struct vm_area_struct *vma,
 		address = pvmw.address;
 
 		// add by lsc
-		if (enable_swap_log)
+		if (enable_swap_log && swap_log_memcg && (swap_log_memcg == folio_memcg(folio))) {
 			if (unlikely(add_or_update_pa_va_mapping(pfn, address)<0))
 				printk("add_or_update_pa_va_mapping failed because of OOM\n");
+		}
 		// add by lsc end
 
 		anon_exclusive = folio_test_anon(folio) &&
