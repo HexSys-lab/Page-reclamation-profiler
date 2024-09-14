@@ -74,7 +74,7 @@
 #include <linux/hashtable.h>
 #include <linux/slab.h>
 #include <linux/kernel.h>
-#define PA_VA_HASH_BITS 12
+#define PA_VA_HASH_BITS 20
 extern struct cgroup *swap_log_cgroup;
 struct mem_cgroup *swap_log_memcg = NULL;
 EXPORT_SYMBOL(swap_log_memcg);
@@ -84,29 +84,46 @@ EXPORT_SYMBOL(enable_swap_log);
 struct pa_va_entry {
     unsigned long pfn;
     unsigned long va;
-    struct hlist_node hnode;
+    struct hlist_node hnode_pfn;
+    struct hlist_node hnode_va;
 };
 DEFINE_HASHTABLE(pa_va_table, PA_VA_HASH_BITS);
+DEFINE_HASHTABLE(va_pa_table, PA_VA_HASH_BITS);
 
 int add_or_update_pa_va_mapping(unsigned long pfn, unsigned long va)
 {
     struct pa_va_entry *entry;
     struct pa_va_entry *tmp;
 
-    hash_for_each_possible(pa_va_table, tmp, hnode, pfn) {
-        if (tmp->pfn == pfn) {
-            tmp->va = va; // Update existing entry
+    // check if same va-pfn mapping exists
+	// if so, update the mapping
+    hash_for_each_possible(va_pa_table, tmp, hnode_va, va) {
+        if (tmp->va == va) {
+            tmp->pfn = pfn;
+            hash_del(&tmp->hnode_pfn);
+            hash_add(pa_va_table, &tmp->hnode_pfn, pfn);
             return 0;
         }
     }
 
+    hash_for_each_possible(pa_va_table, tmp, hnode_pfn, pfn) {
+        if (tmp->pfn == pfn) {
+            tmp->va = va;
+            hash_del(&tmp->hnode_va);
+            hash_add(va_pa_table, &tmp->hnode_va, va);
+            return 0;
+        }
+    }
+
+	// if not, add new mapping
     entry = kmalloc(sizeof(*entry), GFP_KERNEL);
     if (!entry)
         return -ENOMEM;
 
     entry->pfn = pfn;
     entry->va = va;
-    hash_add(pa_va_table, &entry->hnode, pfn);
+    hash_add(pa_va_table, &entry->hnode_pfn, pfn);
+    hash_add(va_pa_table, &entry->hnode_va, va);
 
     return 0;
 }
@@ -116,7 +133,7 @@ unsigned long lookup_va(unsigned long pfn)
     struct pa_va_entry *entry;
     unsigned long va = 0;
 
-    hash_for_each_possible(pa_va_table, entry, hnode, pfn) {
+    hash_for_each_possible(pa_va_table, entry, hnode_pfn, pfn) {
         if (entry->pfn == pfn) {
             va = entry->va;
             break;
@@ -130,9 +147,10 @@ void remove_pa_va_mapping(unsigned long pfn)
 {
     struct pa_va_entry *entry;
 
-    hash_for_each_possible(pa_va_table, entry, hnode, pfn) {
+    hash_for_each_possible(pa_va_table, entry, hnode_pfn, pfn) {
         if (entry->pfn == pfn) {
-            hash_del(&entry->hnode);
+            hash_del(&entry->hnode_pfn);
+            hash_del(&entry->hnode_va);
             kfree(entry);
             break;
         }
@@ -145,8 +163,9 @@ void clear_pa_va_table(void)
     struct pa_va_entry *entry;
     struct hlist_node *tmp;
 
-    hash_for_each_safe(pa_va_table, bkt, tmp, entry, hnode) {
-        hash_del(&entry->hnode);
+    hash_for_each_safe(pa_va_table, bkt, tmp, entry, hnode_pfn) {
+        hash_del(&entry->hnode_pfn);
+        hash_del(&entry->hnode_va);
         kfree(entry);
     }
 }

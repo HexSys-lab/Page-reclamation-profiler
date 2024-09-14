@@ -85,13 +85,8 @@
 #include "internal.h"
 
 //add by lsc
-#include <linux/kernel.h>
-#include <linux/hashtable.h>
-#include <linux/slab.h> 
-
-extern struct hlist_head pa_va_table[];
 extern int enable_swap_log;
-int add_or_update_pa_va_mapping(unsigned long pfn, unsigned long va);
+extern int add_or_update_pa_va_mapping(unsigned long pfn, unsigned long va);
 //add by lsc end
 
 static struct kmem_cache *anon_vma_cachep;
@@ -1695,7 +1690,8 @@ static bool try_to_unmap_one(struct folio *folio, struct vm_area_struct *vma,
 
 		// add by lsc
 		if (enable_swap_log)
-			(void)add_or_update_pa_va_mapping(pfn, address);
+			if (unlikely(add_or_update_pa_va_mapping(pfn, address)<0))
+				printk("add_or_update_pa_va_mapping failed because of OOM\n");
 		// add by lsc end
 
 		anon_exclusive = folio_test_anon(folio) &&
