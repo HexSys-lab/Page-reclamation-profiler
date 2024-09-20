@@ -78,8 +78,24 @@
 extern struct cgroup *swap_log_cgroup;
 struct mem_cgroup *swap_log_memcg = NULL;
 EXPORT_SYMBOL(swap_log_memcg);
-int enable_swap_log = 0;
-EXPORT_SYMBOL(enable_swap_log);
+
+struct swap_log_control
+{
+	int enable_swap_log;
+	int enable_pa_va_mapping;
+	unsigned long pa_va_ht_size;
+	unsigned long pa_va_ht_insert_times;
+};
+
+struct swap_log_control swap_log_ctl = {
+	.enable_swap_log = false,
+	.enable_pa_va_mapping = false,
+	.pa_va_ht_size = 0,
+	.pa_va_ht_insert_times = 0,
+};
+EXPORT_SYMBOL(swap_log_ctl);
+unsigned long swap_log_pa_va_ht_size_max = 0;
+EXPORT_SYMBOL(swap_log_pa_va_ht_size_max);
 
 struct pa_va_entry {
     unsigned long pfn;
@@ -94,6 +110,8 @@ int add_or_update_pa_va_mapping(unsigned long pfn, unsigned long va)
 {
     struct pa_va_entry *entry;
     struct pa_va_entry *tmp;
+
+	swap_log_ctl.pa_va_ht_insert_times++;
 
     // check if same va-pfn mapping exists
 	// if so, update the mapping
@@ -124,6 +142,10 @@ int add_or_update_pa_va_mapping(unsigned long pfn, unsigned long va)
     entry->va = va;
     hash_add(pa_va_table, &entry->hnode_pfn, pfn);
     hash_add(va_pa_table, &entry->hnode_va, va);
+	swap_log_ctl.pa_va_ht_size++;
+
+	if (unlikely(swap_log_ctl.pa_va_ht_size - swap_log_pa_va_ht_size_max > 100))
+		swap_log_pa_va_ht_size_max = swap_log_ctl.pa_va_ht_size;
 
     return 0;
 }
@@ -152,6 +174,7 @@ void remove_pa_va_mapping(unsigned long pfn)
             hash_del(&entry->hnode_pfn);
             hash_del(&entry->hnode_va);
             kfree(entry);
+			swap_log_ctl.pa_va_ht_size--;
             break;
         }
     }
@@ -168,6 +191,10 @@ void clear_pa_va_table(void)
         hash_del(&entry->hnode_va);
         kfree(entry);
     }
+
+	swap_log_ctl.pa_va_ht_size = 0;
+	swap_log_ctl.pa_va_ht_insert_times = 0;
+	swap_log_pa_va_ht_size_max = 0;
 }
 EXPORT_SYMBOL(clear_pa_va_table);
 //add by lsc end
@@ -1108,6 +1135,7 @@ static bool may_enter_fs(struct folio *folio, gfp_t gfp_mask)
 }
 
 // add by lsc, only used for write swap log
+/*
 static void write_log_to_file(const char *log_msg)
 {
     struct file *file;
@@ -1130,6 +1158,52 @@ static void write_log_to_file(const char *log_msg)
     // Close the file
     filp_close(file, NULL);
 }
+*/
+
+static struct file *swap_log_file = NULL;
+// static DEFINE_MUTEX(swap_log_mutex);
+
+int init_swap_log_file(void)
+{
+    swap_log_file = filp_open("/home/cc/swap_log.txt", O_WRONLY | O_CREAT | O_TRUNC, 0666);
+    if (IS_ERR(swap_log_file)) {
+        printk(KERN_ERR "Failed to open log file\n");
+        swap_log_file = NULL;
+        return PTR_ERR(swap_log_file);
+    }
+    return 0;
+}
+EXPORT_SYMBOL(init_swap_log_file);
+
+void close_swap_log_file(void)
+{
+    if (swap_log_file) {
+        filp_close(swap_log_file, NULL);
+        swap_log_file = NULL;
+    }
+}
+EXPORT_SYMBOL(close_swap_log_file);
+
+static void write_swap_log(const char *log_msg)
+{
+    loff_t pos = 0;
+    ssize_t ret;
+
+    if (!swap_log_file) {
+        printk(KERN_ERR "Log file is not opened\n");
+        return;
+    }
+
+    // mutex_lock(&swap_log_mutex);
+
+    ret = kernel_write(swap_log_file, log_msg, strlen(log_msg), &pos);
+    if (ret < 0) {
+        printk(KERN_ERR "Failed to write to log file\n");
+    }
+
+    // mutex_unlock(&swap_log_mutex);
+}
+// add by lsc end
 
 /*
  * shrink_folio_list() returns the number of reclaimed pages
@@ -1554,17 +1628,21 @@ free_it:
 		nr_reclaimed += nr_pages;
 
 		// add by lsc
-        if (enable_swap_log && swap_log_memcg && folio_test_swapbacked(folio)) {	//don't check whether folio is anon because I guess the mapping has been cleared; hasn't been verified yet
+        if (swap_log_ctl.enable_swap_log && swap_log_memcg && folio_test_swapbacked(folio)) {
+			//don't check whether folio is anon because I guess the mapping has been cleared; hasn't been verified yet
             if (folio_memcg(folio) == swap_log_memcg) {
             	unsigned long pfn = folio_pfn(folio);
-				unsigned long va = lookup_va(pfn);
-                // printk(KERN_INFO "swap folio: pfn = %lu, nr_pages = %u\n", pfn, nr_pages);
 				char log_msg[128];
-            	snprintf(log_msg, sizeof(log_msg), "swap folio: pfn = %lx, va = %lx, nr_pages = %u, NUMA node = %d\n", pfn, va, nr_pages, pfn_to_nid(pfn));
-            	write_log_to_file(log_msg);
-				remove_pa_va_mapping(pfn);
-            }
-        }
+				if (swap_log_ctl.enable_pa_va_mapping) {
+					unsigned long va = lookup_va(pfn);
+					snprintf(log_msg, sizeof(log_msg), "swap folio: pfn = %lx, va = %lx, nr_pages = %u, NUMA node = %d\n", pfn, va, nr_pages, pfn_to_nid(pfn));
+					remove_pa_va_mapping(pfn);
+				} else {
+					snprintf(log_msg, sizeof(log_msg), "swap folio: pfn = %lx, nr_pages = %u, NUMA node = %d\n", pfn, nr_pages, pfn_to_nid(pfn));
+				}
+				write_swap_log(log_msg);
+			}
+		}
 		// add by lsc end
 
 		if (folio_test_large(folio) &&
@@ -1647,8 +1725,7 @@ keep:
 
 	if (plug)
 		swap_write_unplug(plug);
-	
-	printk(KERN_INFO "Number of reclaimed pages: %u\n", nr_reclaimed);	// add by lsc, for debug
+
 	return nr_reclaimed;
 }
 
