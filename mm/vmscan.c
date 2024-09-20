@@ -1165,9 +1165,18 @@ static struct file *swap_log_file = NULL;
 
 int init_swap_log_file(void)
 {
-    swap_log_file = filp_open("/home/cc/swap_log.txt", O_WRONLY | O_CREAT | O_TRUNC, 0666);
-    if (IS_ERR(swap_log_file)) {
+	// Open the file with O_TRUNC to clear the file content initially
+    struct file *file = filp_open("/home/cc/swap_log.txt", O_WRONLY | O_CREAT | O_TRUNC, 0666);
+    if (IS_ERR(file)) {
         printk(KERN_ERR "Failed to open log file\n");
+        return PTR_ERR(file);
+    }
+    filp_close(file, NULL);
+
+    // Reopen the file with O_APPEND for subsequent writes
+    swap_log_file = filp_open("/home/cc/swap_log.txt", O_WRONLY | O_CREAT | O_APPEND, 0666);
+    if (IS_ERR(swap_log_file)) {
+        printk(KERN_ERR "Failed to reopen log file\n");
         swap_log_file = NULL;
         return PTR_ERR(swap_log_file);
     }
