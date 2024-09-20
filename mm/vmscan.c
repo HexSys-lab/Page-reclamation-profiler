@@ -88,8 +88,8 @@ struct swap_log_control
 };
 
 struct swap_log_control swap_log_ctl = {
-	.enable_swap_log = false,
-	.enable_pa_va_mapping = false,
+	.enable_swap_log = 0,
+	.enable_pa_va_mapping = 0,
 	.pa_va_ht_size = 0,
 	.pa_va_ht_insert_times = 0,
 };
