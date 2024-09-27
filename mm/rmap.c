@@ -89,10 +89,15 @@ extern struct mem_cgroup *swap_log_memcg;
 
 struct swap_log_control
 {
-	int enable_swap_log;
-	int enable_pa_va_mapping;
+	bool enable_swap_log;
+	bool enable_write_log_file;
 	unsigned long pa_va_ht_size;
 	unsigned long pa_va_ht_insert_times;
+	unsigned long swap_log_counter;
+	unsigned long checkpoint_cnt_1;	//DMA pinned
+	unsigned long checkpoint_cnt_2;	//PG_dirty
+	unsigned long checkpoint_cnt_3;	//release buffer
+	unsigned long checkpoint_cnt_4; //mapping clear
 };
 extern struct swap_log_control swap_log_ctl;
 
@@ -1699,7 +1704,7 @@ static bool try_to_unmap_one(struct folio *folio, struct vm_area_struct *vma,
 		address = pvmw.address;
 
 		// add by lsc
-		if (swap_log_ctl.enable_pa_va_mapping && swap_log_memcg && (swap_log_memcg == folio_memcg(folio))) {
+		if (swap_log_ctl.enable_swap_log && swap_log_memcg && (swap_log_memcg == folio_memcg(folio))) {
 			if (unlikely(add_or_update_pa_va_mapping(pfn, address)<0))
 				printk("add_or_update_pa_va_mapping failed because of OOM\n");
 		}

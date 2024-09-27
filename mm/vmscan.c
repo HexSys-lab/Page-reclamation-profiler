@@ -74,37 +74,50 @@
 #include <linux/hashtable.h>
 #include <linux/slab.h>
 #include <linux/kernel.h>
-#define PA_VA_HASH_BITS 20
+
 extern struct cgroup *swap_log_cgroup;
 struct mem_cgroup *swap_log_memcg = NULL;
 EXPORT_SYMBOL(swap_log_memcg);
 
+unsigned long shrink_folio_list_counter = 0;
+EXPORT_SYMBOL(shrink_folio_list_counter);
+
 struct swap_log_control
 {
-	int enable_swap_log;
-	int enable_pa_va_mapping;
+	bool enable_swap_log;
+	bool enable_write_log_file;
 	unsigned long pa_va_ht_size;
 	unsigned long pa_va_ht_insert_times;
+	unsigned long swap_log_counter;
+	unsigned long checkpoint_cnt_1;	//DMA pinned
+	unsigned long checkpoint_cnt_2;	//PG_dirty
+	unsigned long checkpoint_cnt_3;	//release buffer
+	unsigned long checkpoint_cnt_4; //mapping clear
 };
 
 struct swap_log_control swap_log_ctl = {
-	.enable_swap_log = 0,
-	.enable_pa_va_mapping = 0,
+	.enable_swap_log = false,
+	.enable_write_log_file = false,
 	.pa_va_ht_size = 0,
 	.pa_va_ht_insert_times = 0,
+	.swap_log_counter = 0,
+	.checkpoint_cnt_1 = 0,
+	.checkpoint_cnt_2 = 0,
+	.checkpoint_cnt_3 = 0,
+	.checkpoint_cnt_4 = 0,
 };
 EXPORT_SYMBOL(swap_log_ctl);
-unsigned long swap_log_pa_va_ht_size_max = 0;
-EXPORT_SYMBOL(swap_log_pa_va_ht_size_max);
 
 struct pa_va_entry {
     unsigned long pfn;
     unsigned long va;
     struct hlist_node hnode_pfn;
-    struct hlist_node hnode_va;
 };
+
+#define PA_VA_HASH_BITS 20
 DEFINE_HASHTABLE(pa_va_table, PA_VA_HASH_BITS);
-DEFINE_HASHTABLE(va_pa_table, PA_VA_HASH_BITS);
+unsigned long swap_log_pa_va_ht_size_max = 0;
+EXPORT_SYMBOL(swap_log_pa_va_ht_size_max);
 
 int add_or_update_pa_va_mapping(unsigned long pfn, unsigned long va)
 {
@@ -113,22 +126,11 @@ int add_or_update_pa_va_mapping(unsigned long pfn, unsigned long va)
 
 	swap_log_ctl.pa_va_ht_insert_times++;
 
-    // check if same va-pfn mapping exists
+    // check if same pfn-va mapping exists
 	// if so, update the mapping
-    hash_for_each_possible(va_pa_table, tmp, hnode_va, va) {
-        if (tmp->va == va) {
-            tmp->pfn = pfn;
-            hash_del(&tmp->hnode_pfn);
-            hash_add(pa_va_table, &tmp->hnode_pfn, pfn);
-            return 0;
-        }
-    }
-
     hash_for_each_possible(pa_va_table, tmp, hnode_pfn, pfn) {
         if (tmp->pfn == pfn) {
             tmp->va = va;
-            hash_del(&tmp->hnode_va);
-            hash_add(va_pa_table, &tmp->hnode_va, va);
             return 0;
         }
     }
@@ -141,7 +143,6 @@ int add_or_update_pa_va_mapping(unsigned long pfn, unsigned long va)
     entry->pfn = pfn;
     entry->va = va;
     hash_add(pa_va_table, &entry->hnode_pfn, pfn);
-    hash_add(va_pa_table, &entry->hnode_va, va);
 	swap_log_ctl.pa_va_ht_size++;
 
 	if (unlikely(swap_log_ctl.pa_va_ht_size - swap_log_pa_va_ht_size_max > 100))
@@ -172,7 +173,6 @@ void remove_pa_va_mapping(unsigned long pfn)
     hash_for_each_possible(pa_va_table, entry, hnode_pfn, pfn) {
         if (entry->pfn == pfn) {
             hash_del(&entry->hnode_pfn);
-            hash_del(&entry->hnode_va);
             kfree(entry);
 			swap_log_ctl.pa_va_ht_size--;
             break;
@@ -188,7 +188,6 @@ void clear_pa_va_table(void)
 
     hash_for_each_safe(pa_va_table, bkt, tmp, entry, hnode_pfn) {
         hash_del(&entry->hnode_pfn);
-        hash_del(&entry->hnode_va);
         kfree(entry);
     }
 
@@ -1135,31 +1134,6 @@ static bool may_enter_fs(struct folio *folio, gfp_t gfp_mask)
 }
 
 // add by lsc, only used for write swap log
-/*
-static void write_log_to_file(const char *log_msg)
-{
-    struct file *file;
-    loff_t pos = 0;
-    ssize_t ret;
-
-    // Open the log file
-    file = filp_open("/home/cc/swap_log.txt", O_WRONLY|O_CREAT|O_APPEND, 0666);
-    if (IS_ERR(file)) {
-        printk(KERN_ERR "Failed to open log file\n");
-        return;
-    }
-
-    // Write the log message to the file
-    ret = kernel_write(file, log_msg, strlen(log_msg), &pos);
-    if (ret < 0) {
-        printk(KERN_ERR "Failed to write to log file\n");
-    }
-
-    // Close the file
-    filp_close(file, NULL);
-}
-*/
-
 static struct file *swap_log_file = NULL;
 // static DEFINE_MUTEX(swap_log_mutex);
 
@@ -1198,7 +1172,7 @@ static void write_swap_log(const char *log_msg)
     loff_t pos = 0;
     ssize_t ret;
 
-    if (!swap_log_file) {
+    if (unlikely(!swap_log_file)) {
         printk(KERN_ERR "Log file is not opened\n");
         return;
     }
@@ -1206,7 +1180,7 @@ static void write_swap_log(const char *log_msg)
     // mutex_lock(&swap_log_mutex);
 
     ret = kernel_write(swap_log_file, log_msg, strlen(log_msg), &pos);
-    if (ret < 0) {
+    if (unlikely(ret < 0)) {
         printk(KERN_ERR "Failed to write to log file\n");
     }
 
@@ -1239,6 +1213,14 @@ static unsigned int shrink_folio_list(struct list_head *folio_list,
 		struct cgroup_subsys_state *swap_log_css = get_cgroup_css(swap_log_cgroup, &memory_cgrp_subsys);
 		if (swap_log_css)
         	swap_log_memcg = container_of(swap_log_css, struct mem_cgroup, css);
+	}
+
+	bool swap_log_flag = false;
+
+	if (swap_log_ctl.enable_swap_log && swap_log_memcg && folio_memcg(lru_to_folio(folio_list))==swap_log_memcg) {
+		//we may also use sc->target_mem_cgroup instead of folio_memcg to check the current memcg
+		swap_log_flag = true;
+		shrink_folio_list_counter++;
 	}
 	// add by lsc end
 
@@ -1474,7 +1456,7 @@ retry:
 			if (folio_test_pmd_mappable(folio))
 				flags |= TTU_SPLIT_HUGE_PMD;
 
-			try_to_unmap(folio, flags);
+			try_to_unmap(folio, flags);		//where PA-VA mapping is recorded
 			if (folio_mapped(folio)) {
 				stat->nr_unmap_fail += nr_pages;
 				if (!was_swapbacked &&
@@ -1484,6 +1466,12 @@ retry:
 			}
 		}
 
+		//add by lsc, at this point, unmap is done
+		bool swap_log_flag_2 = false;	//for anon checkpoints
+		if (swap_log_flag && (folio_test_swapbacked(folio) || folio_test_anon(folio))) {
+			swap_log_flag_2 = true;
+			swap_log_ctl.checkpoint_cnt_1++;
+		}
 		/*
 		 * Folio is unmapped now so it cannot be newly pinned anymore.
 		 * No point in trying to reclaim folio if it is pinned.
@@ -1493,6 +1481,12 @@ retry:
 		 */
 		if (folio_maybe_dma_pinned(folio))
 			goto activate_locked;
+
+		//add by lsc, at this point, DMA pinned is checked
+		if (swap_log_flag_2) {
+			swap_log_ctl.checkpoint_cnt_1--;
+			swap_log_ctl.checkpoint_cnt_2++;
+		}
 
 		mapping = folio_mapping(folio);
 		if (folio_test_dirty(folio)) {
@@ -1566,6 +1560,12 @@ retry:
 			}
 		}
 
+		//add by lsc, at this point, PG_dirty flag is checked
+		if (swap_log_flag_2) {
+			swap_log_ctl.checkpoint_cnt_2--;
+			swap_log_ctl.checkpoint_cnt_3++;
+		}
+
 		/*
 		 * If the folio has buffers, try to free the buffer
 		 * mappings associated with this folio. If we succeed
@@ -1593,6 +1593,9 @@ retry:
 			if (!filemap_release_folio(folio, sc->gfp_mask))
 				goto activate_locked;
 			if (!mapping && folio_ref_count(folio) == 1) {
+				//add by lsc, special checkpoint
+				if (swap_log_flag_2)
+					swap_log_ctl.checkpoint_cnt_3--;
 				folio_unlock(folio);
 				if (folio_put_testzero(folio))
 					goto free_it;
@@ -1610,6 +1613,12 @@ retry:
 			}
 		}
 
+		//add by lsc, at this point, file folio doesn't need release
+		if (swap_log_flag_2) {
+			swap_log_ctl.checkpoint_cnt_3--;
+			swap_log_ctl.checkpoint_cnt_4++;
+		}
+
 		if (folio_test_anon(folio) && !folio_test_swapbacked(folio)) {
 			/* follow __remove_mapping for reference */
 			if (!folio_ref_freeze(folio, 1))
@@ -1625,8 +1634,12 @@ retry:
 			count_vm_events(PGLAZYFREED, nr_pages);
 			count_memcg_folio_events(folio, PGLAZYFREED, nr_pages);
 		} else if (!mapping || !__remove_mapping(mapping, folio, true,
-							 sc->target_mem_cgroup))
+							 sc->target_mem_cgroup))	//this is where folio->mapping is cleared
 			goto keep_locked;
+
+		//add by lsc, at this point, folio->mapping is checked, and folio is ready to be freed
+		if (swap_log_flag_2)
+			swap_log_ctl.checkpoint_cnt_4--;
 
 		folio_unlock(folio);
 free_it:
@@ -1637,20 +1650,18 @@ free_it:
 		nr_reclaimed += nr_pages;
 
 		// add by lsc
-        if (swap_log_ctl.enable_swap_log && swap_log_memcg && folio_test_swapbacked(folio)) {
-			//don't check whether folio is anon because I guess the mapping has been cleared; hasn't been verified yet
-            if (folio_memcg(folio) == swap_log_memcg) {
-            	unsigned long pfn = folio_pfn(folio);
-				char log_msg[128];
-				if (swap_log_ctl.enable_pa_va_mapping) {
-					unsigned long va = lookup_va(pfn);
-					snprintf(log_msg, sizeof(log_msg), "swap folio: pfn = %lx, va = %lx, nr_pages = %u, NUMA node = %d\n", pfn, va, nr_pages, pfn_to_nid(pfn));
-					remove_pa_va_mapping(pfn);
-				} else {
-					snprintf(log_msg, sizeof(log_msg), "swap folio: pfn = %lx, nr_pages = %u, NUMA node = %d\n", pfn, nr_pages, pfn_to_nid(pfn));
-				}
+        if (swap_log_flag && folio_test_swapbacked(folio)) {
+			//don't check whether folio is anon because the mapping has been cleared
+			//we may not check folio_test_swapbacked(folio) in the future to capture file folios
+			//the if statement can be replaced by swap_log_flag_2, but for straightforwardness, we keep it
+            unsigned long pfn = folio_pfn(folio);
+			char log_msg[128];
+			unsigned long va = lookup_va(pfn);
+			snprintf(log_msg, sizeof(log_msg), "swap folio: pfn = %lx, va = %lx, nr_pages = %u, NUMA node = %d\n", pfn, va, nr_pages, pfn_to_nid(pfn));
+			swap_log_ctl.swap_log_counter++;
+			remove_pa_va_mapping(pfn);
+			if (swap_log_ctl.enable_write_log_file)
 				write_swap_log(log_msg);
-			}
 		}
 		// add by lsc end
 
