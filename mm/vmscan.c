@@ -1135,7 +1135,10 @@ static bool may_enter_fs(struct folio *folio, gfp_t gfp_mask)
 
 // add by lsc, only used for write swap log
 static struct file *swap_log_file = NULL;
-// static DEFINE_MUTEX(swap_log_mutex);
+#define MAX_LOG_ENTRIES 1000
+#define MAX_LOG_MSG_LEN 128
+static char swap_log_buffer[MAX_LOG_ENTRIES][MAX_LOG_MSG_LEN];
+static int swap_log_buffer_size = 0;
 
 int init_swap_log_file(void)
 {
@@ -1158,9 +1161,32 @@ int init_swap_log_file(void)
 }
 EXPORT_SYMBOL(init_swap_log_file);
 
+static void flush_swap_log_buffer(void)
+{
+    loff_t pos = 0;
+    ssize_t ret;
+    int i;
+
+    if (unlikely(!swap_log_file)) {
+        printk(KERN_ERR "Log file is not opened\n");
+        return;
+    }
+
+    for (i = 0; i < swap_log_buffer_size; i++) {
+        ret = kernel_write(swap_log_file, swap_log_buffer[i], strlen(swap_log_buffer[i]), &pos);
+        if (unlikely(ret < 0)) {
+            printk(KERN_ERR "Failed to write to log file\n");
+            break;
+        }
+    }
+
+    swap_log_buffer_size = 0; // Reset the log count after flushing
+}
+
 void close_swap_log_file(void)
 {
     if (swap_log_file) {
+		flush_swap_log_buffer();
         filp_close(swap_log_file, NULL);
         swap_log_file = NULL;
     }
@@ -1169,22 +1195,26 @@ EXPORT_SYMBOL(close_swap_log_file);
 
 static void write_swap_log(const char *log_msg)
 {
-    loff_t pos = 0;
-    ssize_t ret;
+    unsigned long flags;
+	static DEFINE_SPINLOCK(swap_log_buffer_lock);
 
     if (unlikely(!swap_log_file)) {
         printk(KERN_ERR "Log file is not opened\n");
         return;
     }
 
-    // mutex_lock(&swap_log_mutex);
+    spin_lock_irqsave(&swap_log_buffer_lock, flags);
 
-    ret = kernel_write(swap_log_file, log_msg, strlen(log_msg), &pos);
-    if (unlikely(ret < 0)) {
-        printk(KERN_ERR "Failed to write to log file\n");
-    }
+    // Copy the log message to the buffer
+	strncpy(swap_log_buffer[swap_log_buffer_size], log_msg, MAX_LOG_MSG_LEN - 1);
+    swap_log_buffer[swap_log_buffer_size][MAX_LOG_MSG_LEN - 1] = '\0'; // Ensure null-termination
+    swap_log_buffer_size++;
 
-    // mutex_unlock(&swap_log_mutex);
+    // If the buffer is full, flush it to the file
+    if (swap_log_buffer_size >= MAX_LOG_ENTRIES)
+        flush_swap_log_buffer();
+    
+	spin_unlock_irqrestore(&swap_log_buffer_lock, flags);
 }
 // add by lsc end
 
@@ -1222,6 +1252,9 @@ static unsigned int shrink_folio_list(struct list_head *folio_list,
 		swap_log_flag = true;
 		shrink_folio_list_counter++;
 	}
+
+	// don't directly writing to the global counter to avoid global variable contention
+	unsigned long local_checkpoint_cnt_1 = 0, local_checkpoint_cnt_2 = 0, local_checkpoint_cnt_3 = 0, local_checkpoint_cnt_4 = 0;
 	// add by lsc end
 
 retry:
@@ -1470,7 +1503,7 @@ retry:
 		bool swap_log_flag_2 = false;	//for anon checkpoints
 		if (swap_log_flag && (folio_test_swapbacked(folio) || folio_test_anon(folio))) {
 			swap_log_flag_2 = true;
-			swap_log_ctl.checkpoint_cnt_1++;
+			local_checkpoint_cnt_1++;
 		}
 		/*
 		 * Folio is unmapped now so it cannot be newly pinned anymore.
@@ -1484,8 +1517,8 @@ retry:
 
 		//add by lsc, at this point, DMA pinned is checked
 		if (swap_log_flag_2) {
-			swap_log_ctl.checkpoint_cnt_1--;
-			swap_log_ctl.checkpoint_cnt_2++;
+			local_checkpoint_cnt_1--;
+			local_checkpoint_cnt_2++;
 		}
 
 		mapping = folio_mapping(folio);
@@ -1562,8 +1595,8 @@ retry:
 
 		//add by lsc, at this point, PG_dirty flag is checked
 		if (swap_log_flag_2) {
-			swap_log_ctl.checkpoint_cnt_2--;
-			swap_log_ctl.checkpoint_cnt_3++;
+			local_checkpoint_cnt_2--;
+			local_checkpoint_cnt_3++;
 		}
 
 		/*
@@ -1595,7 +1628,7 @@ retry:
 			if (!mapping && folio_ref_count(folio) == 1) {
 				//add by lsc, special checkpoint
 				if (swap_log_flag_2)
-					swap_log_ctl.checkpoint_cnt_3--;
+					local_checkpoint_cnt_3--;
 				folio_unlock(folio);
 				if (folio_put_testzero(folio))
 					goto free_it;
@@ -1615,8 +1648,8 @@ retry:
 
 		//add by lsc, at this point, file folio doesn't need release
 		if (swap_log_flag_2) {
-			swap_log_ctl.checkpoint_cnt_3--;
-			swap_log_ctl.checkpoint_cnt_4++;
+			local_checkpoint_cnt_3--;
+			local_checkpoint_cnt_4++;
 		}
 
 		if (folio_test_anon(folio) && !folio_test_swapbacked(folio)) {
@@ -1639,7 +1672,7 @@ retry:
 
 		//add by lsc, at this point, folio->mapping is checked, and folio is ready to be freed
 		if (swap_log_flag_2)
-			swap_log_ctl.checkpoint_cnt_4--;
+			local_checkpoint_cnt_4--;
 
 		folio_unlock(folio);
 free_it:
@@ -1655,7 +1688,7 @@ free_it:
 			//we may not check folio_test_swapbacked(folio) in the future to capture file folios
 			//the if statement can be replaced by swap_log_flag_2, but for straightforwardness, we keep it
             unsigned long pfn = folio_pfn(folio);
-			char log_msg[128];
+			char log_msg[MAX_LOG_MSG_LEN];
 			unsigned long va = lookup_va(pfn);
 			snprintf(log_msg, sizeof(log_msg), "swap folio: pfn = %lx, va = %lx, nr_pages = %u, NUMA node = %d\n", pfn, va, nr_pages, pfn_to_nid(pfn));
 			swap_log_ctl.swap_log_counter++;
@@ -1745,6 +1778,19 @@ keep:
 
 	if (plug)
 		swap_write_unplug(plug);
+
+	// add by lsc; if this still incur a global variable contention, we can use atomic operations
+	if (swap_log_flag) {
+		if (local_checkpoint_cnt_1)
+			swap_log_ctl.checkpoint_cnt_1 += local_checkpoint_cnt_1;
+		if (local_checkpoint_cnt_2)
+			swap_log_ctl.checkpoint_cnt_2 += local_checkpoint_cnt_2;
+		if (local_checkpoint_cnt_3)
+			swap_log_ctl.checkpoint_cnt_3 += local_checkpoint_cnt_3;
+		if (local_checkpoint_cnt_4)
+			swap_log_ctl.checkpoint_cnt_4 += local_checkpoint_cnt_4;
+	}
+	// add by lsc end
 
 	return nr_reclaimed;
 }
