@@ -92,12 +92,7 @@ struct swap_log_control
 	bool enable_swap_log;
 	bool enable_write_log_file;
 	unsigned long pa_va_ht_size;
-	unsigned long pa_va_ht_insert_times;
 	unsigned long swap_log_counter;
-	unsigned long checkpoint_cnt_1;	//DMA pinned
-	unsigned long checkpoint_cnt_2;	//PG_dirty
-	unsigned long checkpoint_cnt_3;	//release buffer
-	unsigned long checkpoint_cnt_4; //mapping clear
 };
 extern struct swap_log_control swap_log_ctl;
 

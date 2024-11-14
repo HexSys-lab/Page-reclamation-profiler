@@ -87,24 +87,14 @@ struct swap_log_control
 	bool enable_swap_log;
 	bool enable_write_log_file;
 	unsigned long pa_va_ht_size;
-	unsigned long pa_va_ht_insert_times;
 	unsigned long swap_log_counter;
-	unsigned long checkpoint_cnt_1;	//DMA pinned
-	unsigned long checkpoint_cnt_2;	//PG_dirty
-	unsigned long checkpoint_cnt_3;	//release buffer
-	unsigned long checkpoint_cnt_4; //mapping clear
 };
 
 struct swap_log_control swap_log_ctl = {
 	.enable_swap_log = false,
 	.enable_write_log_file = false,
 	.pa_va_ht_size = 0,
-	.pa_va_ht_insert_times = 0,
-	.swap_log_counter = 0,
-	.checkpoint_cnt_1 = 0,
-	.checkpoint_cnt_2 = 0,
-	.checkpoint_cnt_3 = 0,
-	.checkpoint_cnt_4 = 0,
+	.swap_log_counter = 0
 };
 EXPORT_SYMBOL(swap_log_ctl);
 
@@ -123,8 +113,6 @@ int add_or_update_pa_va_mapping(unsigned long pfn, unsigned long va)
 {
     struct pa_va_entry *entry;
     struct pa_va_entry *tmp;
-
-	swap_log_ctl.pa_va_ht_insert_times++;
 
     // check if same pfn-va mapping exists
 	// if so, update the mapping
@@ -192,7 +180,6 @@ void clear_pa_va_table(void)
     }
 
 	swap_log_ctl.pa_va_ht_size = 0;
-	swap_log_ctl.pa_va_ht_insert_times = 0;
 	swap_log_pa_va_ht_size_max = 0;
 }
 EXPORT_SYMBOL(clear_pa_va_table);
@@ -1279,9 +1266,6 @@ static unsigned int shrink_folio_list(struct list_head *folio_list,
 		swap_log_flag = true;
 		shrink_folio_list_counter++;
 	}
-
-	// don't directly writing to the global counter to avoid global variable contention
-	unsigned long local_checkpoint_cnt_1 = 0, local_checkpoint_cnt_2 = 0, local_checkpoint_cnt_3 = 0, local_checkpoint_cnt_4 = 0;
 	// add by lsc end
 
 retry:
@@ -1526,12 +1510,6 @@ retry:
 			}
 		}
 
-		//add by lsc, at this point, unmap is done
-		bool swap_log_flag_2 = false;	//for anon checkpoints
-		if (swap_log_flag && (folio_test_swapbacked(folio) || folio_test_anon(folio))) {
-			swap_log_flag_2 = true;
-			local_checkpoint_cnt_1++;
-		}
 		/*
 		 * Folio is unmapped now so it cannot be newly pinned anymore.
 		 * No point in trying to reclaim folio if it is pinned.
@@ -1541,12 +1519,6 @@ retry:
 		 */
 		if (folio_maybe_dma_pinned(folio))
 			goto activate_locked;
-
-		//add by lsc, at this point, DMA pinned is checked
-		if (swap_log_flag_2) {
-			local_checkpoint_cnt_1--;
-			local_checkpoint_cnt_2++;
-		}
 
 		mapping = folio_mapping(folio);
 		if (folio_test_dirty(folio)) {
@@ -1620,12 +1592,6 @@ retry:
 			}
 		}
 
-		//add by lsc, at this point, PG_dirty flag is checked
-		if (swap_log_flag_2) {
-			local_checkpoint_cnt_2--;
-			local_checkpoint_cnt_3++;
-		}
-
 		/*
 		 * If the folio has buffers, try to free the buffer
 		 * mappings associated with this folio. If we succeed
@@ -1653,9 +1619,6 @@ retry:
 			if (!filemap_release_folio(folio, sc->gfp_mask))
 				goto activate_locked;
 			if (!mapping && folio_ref_count(folio) == 1) {
-				//add by lsc, special checkpoint
-				if (swap_log_flag_2)
-					local_checkpoint_cnt_3--;
 				folio_unlock(folio);
 				if (folio_put_testzero(folio))
 					goto free_it;
@@ -1671,12 +1634,6 @@ retry:
 					continue;
 				}
 			}
-		}
-
-		//add by lsc, at this point, file folio doesn't need release
-		if (swap_log_flag_2) {
-			local_checkpoint_cnt_3--;
-			local_checkpoint_cnt_4++;
 		}
 
 		if (folio_test_anon(folio) && !folio_test_swapbacked(folio)) {
@@ -1696,10 +1653,6 @@ retry:
 		} else if (!mapping || !__remove_mapping(mapping, folio, true,
 							 sc->target_mem_cgroup))	//this is where folio->mapping is cleared
 			goto keep_locked;
-
-		//add by lsc, at this point, folio->mapping is checked, and folio is ready to be freed
-		if (swap_log_flag_2)
-			local_checkpoint_cnt_4--;
 
 		folio_unlock(folio);
 free_it:
@@ -1805,19 +1758,6 @@ keep:
 
 	if (plug)
 		swap_write_unplug(plug);
-
-	// add by lsc; if this still incur a global variable contention, we can use atomic operations
-	if (swap_log_flag) {
-		if (local_checkpoint_cnt_1)
-			swap_log_ctl.checkpoint_cnt_1 += local_checkpoint_cnt_1;
-		if (local_checkpoint_cnt_2)
-			swap_log_ctl.checkpoint_cnt_2 += local_checkpoint_cnt_2;
-		if (local_checkpoint_cnt_3)
-			swap_log_ctl.checkpoint_cnt_3 += local_checkpoint_cnt_3;
-		if (local_checkpoint_cnt_4)
-			swap_log_ctl.checkpoint_cnt_4 += local_checkpoint_cnt_4;
-	}
-	// add by lsc end
 
 	return nr_reclaimed;
 }
