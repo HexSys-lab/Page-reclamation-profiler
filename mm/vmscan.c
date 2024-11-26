@@ -79,22 +79,22 @@ extern struct cgroup *swap_log_cgroup;
 struct mem_cgroup *swap_log_memcg = NULL;
 EXPORT_SYMBOL(swap_log_memcg);
 
-unsigned long shrink_folio_list_counter = 0;
+atomic_long_t shrink_folio_list_counter = ATOMIC_INIT(0);
 EXPORT_SYMBOL(shrink_folio_list_counter);
 
 struct swap_log_control
 {
 	bool enable_swap_log;
 	bool enable_write_log_file;
-	unsigned long pa_va_ht_size;
-	unsigned long swap_log_counter;
+	atomic_long_t pa_va_ht_size;
+	atomic_long_t swap_log_counter;		//this counter can be removed as we can directly count the lines in the log file
 };
 
 struct swap_log_control swap_log_ctl = {
 	.enable_swap_log = false,
 	.enable_write_log_file = false,
-	.pa_va_ht_size = 0,
-	.swap_log_counter = 0
+	.pa_va_ht_size = ATOMIC_INIT(0),
+	.swap_log_counter = ATOMIC_INIT(0),
 };
 EXPORT_SYMBOL(swap_log_ctl);
 
@@ -131,10 +131,11 @@ int add_or_update_pa_va_mapping(unsigned long pfn, unsigned long va)
     entry->pfn = pfn;
     entry->va = va;
     hash_add(pa_va_table, &entry->hnode_pfn, pfn);
-	swap_log_ctl.pa_va_ht_size++;
+	atomic_long_inc(&swap_log_ctl.pa_va_ht_size);
+	unsigned long ht_size = atomic_long_read(&swap_log_ctl.pa_va_ht_size);
 
-	if (unlikely(swap_log_ctl.pa_va_ht_size - swap_log_pa_va_ht_size_max > 100))
-		swap_log_pa_va_ht_size_max = swap_log_ctl.pa_va_ht_size;
+	if (unlikely(ht_size - READ_ONCE(swap_log_pa_va_ht_size_max) > 20))
+		WRITE_ONCE(swap_log_pa_va_ht_size_max, ht_size);
 
     return 0;
 }
@@ -162,7 +163,7 @@ void remove_pa_va_mapping(unsigned long pfn)
         if (entry->pfn == pfn) {
             hash_del(&entry->hnode_pfn);
             kfree(entry);
-			swap_log_ctl.pa_va_ht_size--;
+			atomic_long_dec(&swap_log_ctl.pa_va_ht_size);
             break;
         }
     }
@@ -179,8 +180,8 @@ void clear_pa_va_table(void)
         kfree(entry);
     }
 
-	swap_log_ctl.pa_va_ht_size = 0;
-	swap_log_pa_va_ht_size_max = 0;
+	atomic_long_set(&swap_log_ctl.pa_va_ht_size, 0);
+	WRITE_ONCE(swap_log_pa_va_ht_size_max, 0);
 }
 EXPORT_SYMBOL(clear_pa_va_table);
 //add by lsc end
@@ -1264,7 +1265,7 @@ static unsigned int shrink_folio_list(struct list_head *folio_list,
 	if (swap_log_ctl.enable_swap_log && swap_log_memcg && folio_memcg(lru_to_folio(folio_list))==swap_log_memcg) {
 		//we may also use sc->target_mem_cgroup instead of folio_memcg to check the current memcg
 		swap_log_flag = true;
-		shrink_folio_list_counter++;
+		atomic_long_inc(&shrink_folio_list_counter);
 	}
 	// add by lsc end
 
@@ -1671,7 +1672,7 @@ free_it:
 			char log_msg[MAX_LOG_MSG_LEN];
 			unsigned long va = lookup_va(pfn);
 			snprintf(log_msg, sizeof(log_msg), "swap folio: pfn = %lx, va = %lx, nr_pages = %u, NUMA node = %d\n", pfn, va, nr_pages, pfn_to_nid(pfn));
-			swap_log_ctl.swap_log_counter++;
+			atomic_long_inc(&swap_log_ctl.swap_log_counter);
 			remove_pa_va_mapping(pfn);
 			if (swap_log_ctl.enable_write_log_file)
 				write_swap_log(log_msg);

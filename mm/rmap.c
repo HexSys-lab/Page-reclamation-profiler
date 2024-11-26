@@ -91,8 +91,8 @@ struct swap_log_control
 {
 	bool enable_swap_log;
 	bool enable_write_log_file;
-	unsigned long pa_va_ht_size;
-	unsigned long swap_log_counter;
+	atomic_long_t pa_va_ht_size;
+	atomic_long_t swap_log_counter;
 };
 extern struct swap_log_control swap_log_ctl;
 
