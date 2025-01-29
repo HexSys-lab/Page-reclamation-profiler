@@ -213,6 +213,43 @@ static int proc_root_link(struct dentry *dentry, struct path *path)
 	return result;
 }
 
+#ifdef PAGE_RECLAIM_TIME_BREAKDOWN
+static int proc_pid_page_reclaim_breakdown(struct seq_file *m, struct pid_namespace *ns,
+			struct pid *pid, struct task_struct *task)
+{
+	struct task_struct *t = task;
+	struct page_reclaim_breakdown pg_reclaim_breakdown = t->pg_reclaim_breakdown;
+
+	seq_printf(m,
+		"stage_2_cycles\t"
+		"stage_3_cycles\t"
+		"stage_4_cycles\t"
+		"stage_5_cycles\t"
+		"stage_6_cycles\t"
+		"\n"
+		);
+
+	seq_printf(m,
+		"%llu\t"
+		"%llu\t"
+		"%llu\t"
+		"%llu\t"
+		"%llu\t"
+		"\n"
+		,
+		pg_reclaim_breakdown.stage_2_cycles,
+		pg_reclaim_breakdown.stage_3_cycles,
+		pg_reclaim_breakdown.stage_4_cycles,
+		pg_reclaim_breakdown.stage_5_cycles,
+		pg_reclaim_breakdown.stage_6_cycles
+		);
+
+	t->pg_reclaim_breakdown = (struct page_reclaim_breakdown){0};
+
+	return 0;
+}
+#endif
+
 /*
  * If the user used setproctitle(), we just get the string from
  * user space at arg_start, and limit it to a maximum of one page.
@@ -3272,6 +3309,9 @@ static const struct pid_entry tgid_base_stuff[] = {
 #ifdef CONFIG_HAVE_ARCH_TRACEHOOK
 	ONE("syscall",    S_IRUSR, proc_pid_syscall),
 #endif
+#ifdef PAGE_RECLAIM_TIME_BREAKDOWN
+	ONE("page_reclaim_breakdown",       S_IRUGO, proc_pid_page_reclaim_breakdown),
+#endif
 	REG("cmdline",    S_IRUGO, proc_pid_cmdline_ops),
 	ONE("stat",       S_IRUGO, proc_tgid_stat),
 	ONE("statm",      S_IRUGO, proc_pid_statm),
@@ -3618,6 +3658,9 @@ static const struct pid_entry tid_base_stuff[] = {
 			 &proc_pid_set_comm_operations, {}),
 #ifdef CONFIG_HAVE_ARCH_TRACEHOOK
 	ONE("syscall",   S_IRUSR, proc_pid_syscall),
+#endif
+#ifdef PAGE_RECLAIM_TIME_BREAKDOWN
+	ONE("page_reclaim_breakdown",       S_IRUGO, proc_pid_page_reclaim_breakdown),
 #endif
 	REG("cmdline",   S_IRUGO, proc_pid_cmdline_ops),
 	ONE("stat",      S_IRUGO, proc_tid_stat),

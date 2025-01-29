@@ -2283,6 +2283,10 @@ __latent_entropy struct task_struct *copy_process(
 
 	init_sigpending(&p->pending);
 
+#ifdef PAGE_RECLAIM_TIME_BREAKDOWN
+	p->pg_reclaim_breakdown = (struct pg_reclaim_breakdown){0};
+#endif
+
 	p->utime = p->stime = p->gtime = 0;
 #ifdef CONFIG_ARCH_HAS_SCALED_CPUTIME
 	p->utimescaled = p->stimescaled = 0;

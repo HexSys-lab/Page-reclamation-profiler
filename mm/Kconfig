@@ -1222,6 +1222,14 @@ config LRU_GEN_WALKS_MMU
 	depends on LRU_GEN && ARCH_HAS_HW_PTE_YOUNG
 # }
 
+# add by lsc
+config PAGE_RECLAIM_TIME_BREAKDOWN
+	bool "Page reclaim time breakdown"
+	def_bool y
+	help
+	  Profile page reclaim time breakdown of MGLRU/2QLRU policy to identify the bottleneck.
+# add by lsc end
+
 config ARCH_SUPPORTS_PER_VMA_LOCK
        def_bool n
 

@@ -80,6 +80,21 @@ struct task_group;
 struct task_struct;
 struct user_event_mm;
 
+#ifdef PAGE_RECLAIM_TIME_BREAKDOWN
+struct page_reclaim_breakdown {
+	unsigned long long last_timestamp;
+	unsigned long long cond_resched_timestamp;
+
+	unsigned long long stage_2_cycles;
+	unsigned long long stage_3_cycles;
+	unsigned long long stage_4_cycles;
+	unsigned long long stage_5_cycles;
+	unsigned long long stage_6_cycles;
+
+	unsigned long long cond_resched_cycles;		// not accumulative
+};
+#endif
+
 /*
  * Task state bitmask. NOTE! These bits are also
  * encoded in fs/proc/array.c: get_task_state().
@@ -1053,6 +1068,10 @@ struct task_struct {
 	/* MM fault and swap info: this can arguably be seen as either mm-specific or thread-specific: */
 	unsigned long			min_flt;
 	unsigned long			maj_flt;
+
+#ifdef PAGE_RECLAIM_TIME_BREAKDOWN
+	struct page_reclaim_breakdown pg_reclaim_breakdown;
+#endif
 
 	/* Empty if CONFIG_POSIX_CPUTIMERS=n */
 	struct posix_cputimers		posix_cputimers;
