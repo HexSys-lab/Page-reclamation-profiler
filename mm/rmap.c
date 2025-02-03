@@ -885,7 +885,15 @@ static bool folio_referenced_one(struct folio *folio,
 		if (pvmw.pte) {
 			if (lru_gen_enabled() &&
 			    pte_young(ptep_get(pvmw.pte))) {
+#ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
+				current->pg_reclaim_breakdown.rmap_timestamp = rdtsc();
+#endif
 				lru_gen_look_around(&pvmw);
+#ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
+				u64 profile_delta = rdtsc() - current->pg_reclaim_breakdown.rmap_timestamp;
+				current->pg_reclaim_breakdown.stage_4_cycles -= profile_delta;	// overlapped
+				current->pg_reclaim_breakdown.stage_2_cycles += profile_delta;
+#endif				
 				referenced++;
 			}
 

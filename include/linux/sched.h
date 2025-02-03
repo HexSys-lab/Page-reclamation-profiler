@@ -80,16 +80,18 @@ struct task_group;
 struct task_struct;
 struct user_event_mm;
 
-#ifdef PAGE_RECLAIM_TIME_BREAKDOWN
+#ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
 struct page_reclaim_breakdown {
 	unsigned long long last_timestamp;
 	unsigned long long cond_resched_timestamp;
+	unsigned long long rmap_timestamp;	// used by lrugen look-around
 
 	unsigned long long stage_2_cycles;
 	unsigned long long stage_3_cycles;
 	unsigned long long stage_4_cycles;
 	unsigned long long stage_5_cycles;
 	unsigned long long stage_6_cycles;
+	unsigned long long clean_up_cycles;
 
 	unsigned long long cond_resched_cycles;		// not accumulative
 };
@@ -1069,7 +1071,7 @@ struct task_struct {
 	unsigned long			min_flt;
 	unsigned long			maj_flt;
 
-#ifdef PAGE_RECLAIM_TIME_BREAKDOWN
+#ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
 	struct page_reclaim_breakdown pg_reclaim_breakdown;
 #endif
 

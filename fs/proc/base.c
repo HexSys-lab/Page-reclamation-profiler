@@ -213,7 +213,7 @@ static int proc_root_link(struct dentry *dentry, struct path *path)
 	return result;
 }
 
-#ifdef PAGE_RECLAIM_TIME_BREAKDOWN
+#ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
 static int proc_pid_page_reclaim_breakdown(struct seq_file *m, struct pid_namespace *ns,
 			struct pid *pid, struct task_struct *task)
 {
@@ -221,27 +221,20 @@ static int proc_pid_page_reclaim_breakdown(struct seq_file *m, struct pid_namesp
 	struct page_reclaim_breakdown pg_reclaim_breakdown = t->pg_reclaim_breakdown;
 
 	seq_printf(m,
-		"stage_2_cycles\t"
-		"stage_3_cycles\t"
-		"stage_4_cycles\t"
-		"stage_5_cycles\t"
-		"stage_6_cycles\t"
-		"\n"
-		);
-
-	seq_printf(m,
-		"%llu\t"
-		"%llu\t"
-		"%llu\t"
-		"%llu\t"
-		"%llu\t"
+		"stage_2_cycles: %llu\n"
+		"stage_3_cycles: %llu\n"
+		"stage_4_cycles: %llu\n"
+		"stage_5_cycles: %llu\n"
+		"stage_6_cycles: %llu\n"
+		"clean_up_cycles: %llu\n"
 		"\n"
 		,
 		pg_reclaim_breakdown.stage_2_cycles,
 		pg_reclaim_breakdown.stage_3_cycles,
 		pg_reclaim_breakdown.stage_4_cycles,
 		pg_reclaim_breakdown.stage_5_cycles,
-		pg_reclaim_breakdown.stage_6_cycles
+		pg_reclaim_breakdown.stage_6_cycles,
+		pg_reclaim_breakdown.clean_up_cycles
 		);
 
 	t->pg_reclaim_breakdown = (struct page_reclaim_breakdown){0};
@@ -3309,7 +3302,7 @@ static const struct pid_entry tgid_base_stuff[] = {
 #ifdef CONFIG_HAVE_ARCH_TRACEHOOK
 	ONE("syscall",    S_IRUSR, proc_pid_syscall),
 #endif
-#ifdef PAGE_RECLAIM_TIME_BREAKDOWN
+#ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
 	ONE("page_reclaim_breakdown",       S_IRUGO, proc_pid_page_reclaim_breakdown),
 #endif
 	REG("cmdline",    S_IRUGO, proc_pid_cmdline_ops),
@@ -3659,7 +3652,7 @@ static const struct pid_entry tid_base_stuff[] = {
 #ifdef CONFIG_HAVE_ARCH_TRACEHOOK
 	ONE("syscall",   S_IRUSR, proc_pid_syscall),
 #endif
-#ifdef PAGE_RECLAIM_TIME_BREAKDOWN
+#ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
 	ONE("page_reclaim_breakdown",       S_IRUGO, proc_pid_page_reclaim_breakdown),
 #endif
 	REG("cmdline",   S_IRUGO, proc_pid_cmdline_ops),
