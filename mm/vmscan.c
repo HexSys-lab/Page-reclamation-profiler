@@ -82,14 +82,6 @@ EXPORT_SYMBOL(swap_log_memcg);
 atomic_long_t shrink_folio_list_counter = ATOMIC_INIT(0);
 EXPORT_SYMBOL(shrink_folio_list_counter);
 
-struct swap_log_control
-{
-	bool enable_swap_log;
-	bool enable_write_log_file;
-	atomic_long_t pa_va_ht_size;
-	atomic_long_t swap_log_counter;		//this counter can be removed as we can directly count the lines in the log file
-};
-
 struct swap_log_control swap_log_ctl = {
 	.enable_swap_log = false,
 	.enable_write_log_file = false,

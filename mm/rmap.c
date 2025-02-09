@@ -85,17 +85,9 @@
 #include "internal.h"
 
 //add by lsc
+#include <linux/vmstat.h>
 extern struct mem_cgroup *swap_log_memcg;
-
-struct swap_log_control
-{
-	bool enable_swap_log;
-	bool enable_write_log_file;
-	atomic_long_t pa_va_ht_size;
-	atomic_long_t swap_log_counter;
-};
 extern struct swap_log_control swap_log_ctl;
-
 extern int add_or_update_pa_va_mapping(unsigned long pfn, unsigned long va);
 //add by lsc end
 
