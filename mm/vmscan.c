@@ -1452,7 +1452,7 @@ retry:
 		}
 
 		if (!ignore_references)
-			references = folio_check_references(folio, sc);
+			references = folio_check_references(folio, sc);	// include rmap look-around (stage 2)
 
 #ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
 		if (!ignore_references) {
@@ -2495,8 +2495,8 @@ static unsigned long shrink_inactive_list(unsigned long nr_to_scan,
 	lru_note_cost(lruvec, file, stat.nr_pageout, nr_scanned - nr_reclaimed);
 #ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
 	profile_timestamp = rdtsc();
-	current->pg_reclaim_breakdown.stage_2_cycles += profile_timestamp -
-		current->pg_reclaim_breakdown.last_timestamp;
+	current->pg_reclaim_breakdown.stage_3_cycles += profile_timestamp -
+		current->pg_reclaim_breakdown.last_timestamp;	// no stage 2 in 2QLRU
 	current->pg_reclaim_breakdown.last_timestamp = profile_timestamp;
 #endif
 
@@ -2608,22 +2608,17 @@ static void shrink_active_list(unsigned long nr_to_scan,
 
 #ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
 	current->pg_reclaim_breakdown.cond_resched_cycles = 0;
-	profile_timestamp = rdtsc();
-	current->pg_reclaim_breakdown.stage_3_cycles += profile_timestamp -
-		current->pg_reclaim_breakdown.last_timestamp;
-	current->pg_reclaim_breakdown.last_timestamp = profile_timestamp;
 #endif
-
 	while (!list_empty(&l_hold)) {
 		struct folio *folio;
 
 #ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
-	current->pg_reclaim_breakdown.cond_resched_timestamp = rdtsc();
+		current->pg_reclaim_breakdown.cond_resched_timestamp = rdtsc();
 #endif
 		cond_resched();
 #ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
-	current->pg_reclaim_breakdown.cond_resched_cycles += rdtsc() -
-		current->pg_reclaim_breakdown.cond_resched_timestamp;
+		current->pg_reclaim_breakdown.cond_resched_cycles += rdtsc() -
+			current->pg_reclaim_breakdown.cond_resched_timestamp;
 #endif
 
 		folio = lru_to_folio(&l_hold);
@@ -2666,14 +2661,6 @@ static void shrink_active_list(unsigned long nr_to_scan,
 		list_add(&folio->lru, &l_inactive);
 	}
 
-#ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
-	profile_timestamp = rdtsc();
-	current->pg_reclaim_breakdown.stage_2_cycles += profile_timestamp -
-		current->pg_reclaim_breakdown.last_timestamp - current->pg_reclaim_breakdown.cond_resched_cycles;
-	current->pg_reclaim_breakdown.last_timestamp = profile_timestamp;
-	current->pg_reclaim_breakdown.cond_resched_cycles = 0;
-#endif
-
 	/*
 	 * Move folios back to the lru list.
 	 */
@@ -2688,19 +2675,16 @@ static void shrink_active_list(unsigned long nr_to_scan,
 	__mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, -nr_taken);
 	spin_unlock_irq(&lruvec->lru_lock);
 
-#ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
-	profile_timestamp = rdtsc();
-	current->pg_reclaim_breakdown.stage_3_cycles += profile_timestamp -
-		current->pg_reclaim_breakdown.last_timestamp;
-	current->pg_reclaim_breakdown.last_timestamp = profile_timestamp;
-#endif
 	if (nr_rotated)
 		lru_note_cost(lruvec, file, 0, nr_rotated);
 	trace_mm_vmscan_lru_shrink_active(pgdat->node_id, nr_taken, nr_activate,
 			nr_deactivate, nr_rotated, sc->priority, file);
+
 #ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
-	current->pg_reclaim_breakdown.stage_2_cycles += rdtsc() -
-		current->pg_reclaim_breakdown.last_timestamp;
+	current->pg_reclaim_breakdown.stage_3_cycles += rdtsc() -
+		current->pg_reclaim_breakdown.last_timestamp - 
+		current->pg_reclaim_breakdown.cond_resched_cycles;	// no stage 2 in 2QLRU
+	current->pg_reclaim_breakdown.cond_resched_cycles = 0;
 #endif
 }
 
@@ -4471,7 +4455,8 @@ static bool try_to_inc_max_seq(struct lruvec *lruvec, unsigned long seq,
 		current->pg_reclaim_breakdown.last_timestamp = rdtsc();
 		bool inc_max_ret = inc_max_seq(lruvec, seq, can_swap, force_scan);
 		current->pg_reclaim_breakdown.stage_3_cycles += rdtsc() - 	
-			current->pg_reclaim_breakdown.last_timestamp - current->pg_reclaim_breakdown.cond_resched_cycles;
+			current->pg_reclaim_breakdown.last_timestamp - 
+			current->pg_reclaim_breakdown.cond_resched_cycles;
 		current->pg_reclaim_breakdown.cond_resched_cycles = 0;
 		return inc_max_ret;
 #else
@@ -4483,6 +4468,9 @@ static bool try_to_inc_max_seq(struct lruvec *lruvec, unsigned long seq,
 	if (seq <= READ_ONCE(mm_state->seq))
 		return false;
 
+#ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
+	current->pg_reclaim_breakdown.last_timestamp = rdtsc();
+#endif
 	/*
 	 * If the hardware doesn't automatically set the accessed bit, fallback
 	 * to lru_gen_look_around(), which only clears the accessed bit in a
@@ -4491,12 +4479,20 @@ static bool try_to_inc_max_seq(struct lruvec *lruvec, unsigned long seq,
 	 */
 	if (!should_walk_mmu()) {
 		success = iterate_mm_list_nowalk(lruvec, seq);
+#ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
+		current->pg_reclaim_breakdown.stage_2_cycles += rdtsc() - 	
+			current->pg_reclaim_breakdown.last_timestamp;
+#endif
 		goto done;
 	}
 
 	walk = set_mm_walk(NULL, true);
 	if (!walk) {
 		success = iterate_mm_list_nowalk(lruvec, seq);
+#ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
+		current->pg_reclaim_breakdown.stage_2_cycles += rdtsc() - 	
+			current->pg_reclaim_breakdown.last_timestamp;
+#endif
 		goto done;
 	}
 
@@ -4507,7 +4503,6 @@ static bool try_to_inc_max_seq(struct lruvec *lruvec, unsigned long seq,
 
 #ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
 	current->pg_reclaim_breakdown.cond_resched_cycles = 0;
-	current->pg_reclaim_breakdown.last_timestamp = rdtsc();
 #endif
 	do {
 		success = iterate_mm_list(walk, &mm);
@@ -4516,7 +4511,8 @@ static bool try_to_inc_max_seq(struct lruvec *lruvec, unsigned long seq,
 	} while (mm);	// proactive PTW
 #ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
 	current->pg_reclaim_breakdown.stage_2_cycles += rdtsc() - 	
-		current->pg_reclaim_breakdown.last_timestamp - current->pg_reclaim_breakdown.cond_resched_cycles;
+		current->pg_reclaim_breakdown.last_timestamp - 
+		current->pg_reclaim_breakdown.cond_resched_cycles;
 	current->pg_reclaim_breakdown.cond_resched_cycles = 0;
 #endif
 
@@ -4529,7 +4525,8 @@ done:
 		success = inc_max_seq(lruvec, seq, can_swap, force_scan);
 #ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
 		current->pg_reclaim_breakdown.stage_3_cycles += rdtsc() - 	
-			current->pg_reclaim_breakdown.last_timestamp - current->pg_reclaim_breakdown.cond_resched_cycles;
+			current->pg_reclaim_breakdown.last_timestamp - 
+			current->pg_reclaim_breakdown.cond_resched_cycles;
 		current->pg_reclaim_breakdown.cond_resched_cycles = 0;
 #endif
 		WARN_ON_ONCE(!success);
@@ -6411,9 +6408,6 @@ static void shrink_lruvec(struct lruvec *lruvec, struct scan_control *sc)
 		if (nr_reclaimed < nr_to_reclaim || proportional_reclaim)
 			continue;
 
-#ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
-		current->pg_reclaim_breakdown.last_timestamp = rdtsc();
-#endif
 		/*
 		 * For kswapd and memcg, reclaim at least the number of pages
 		 * requested. Ensure that the anon and file LRUs are scanned
@@ -6432,6 +6426,10 @@ static void shrink_lruvec(struct lruvec *lruvec, struct scan_control *sc)
 		 */
 		if (!nr_file || !nr_anon)
 			break;
+
+#ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
+		current->pg_reclaim_breakdown.last_timestamp = rdtsc();
+#endif
 
 		if (nr_file > nr_anon) {
 			unsigned long scan_target = targets[LRU_INACTIVE_ANON] +
