@@ -38,7 +38,6 @@ struct reclaim_stat {
 struct swap_log_control
 {
 	bool enable_swap_log;
-	bool enable_write_log_file;
 	atomic_long_t pa_va_ht_size;
 	atomic_long_t swap_log_counter;		//this counter can be removed as we can directly count the lines in the log file
 };

@@ -85,6 +85,7 @@ struct page_reclaim_breakdown {
 	unsigned long long last_timestamp;
 	unsigned long long cond_resched_timestamp;
 	unsigned long long rmap_timestamp;	// used by lrugen look-around
+	unsigned long long cond_resched_cycles;		// not accumulative
 
 	unsigned long long stage_2_cycles;
 	unsigned long long stage_3_cycles;
@@ -93,7 +94,15 @@ struct page_reclaim_breakdown {
 	unsigned long long stage_6_cycles;
 	unsigned long long clean_up_cycles;
 
-	unsigned long long cond_resched_cycles;		// not accumulative
+	// before reclaim
+	unsigned long long nr_pg_promotion;
+	unsigned long long nr_pg_demotion;
+	unsigned long long nr_pg_rotate;
+	unsigned long long nr_pg_nolru;	// isolated, then unevictable or freed
+	// after reclaim, the src must be isolated (inactive list)
+	unsigned long long nr_pg_move_old;
+	unsigned long long nr_pg_move_young;
+	unsigned long long nr_pg_move_young_tmp;	// not accumulative
 };
 #endif
 

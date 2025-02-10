@@ -1701,7 +1701,7 @@ static bool try_to_unmap_one(struct folio *folio, struct vm_area_struct *vma,
 		// add by lsc
 		if (swap_log_ctl.enable_swap_log && swap_log_memcg && (swap_log_memcg == folio_memcg(folio))) {
 			if (unlikely(add_or_update_pa_va_mapping(pfn, address)<0))
-				printk("add_or_update_pa_va_mapping failed because of OOM\n");
+				printk("add_or_update_pa_va_mapping failed\n");
 		}
 		// add by lsc end
 

@@ -84,7 +84,6 @@ EXPORT_SYMBOL(shrink_folio_list_counter);
 
 struct swap_log_control swap_log_ctl = {
 	.enable_swap_log = false,
-	.enable_write_log_file = false,
 	.pa_va_ht_size = ATOMIC_INIT(0),
 	.swap_log_counter = ATOMIC_INIT(0),
 };
@@ -176,7 +175,7 @@ void clear_pa_va_table(void)
 	WRITE_ONCE(swap_log_pa_va_ht_size_max, 0);
 }
 EXPORT_SYMBOL(clear_pa_va_table);
-//add by lsc end
+// add by lsc end
 
 struct scan_control {
 	/* How many pages shrink_list() should reclaim */
@@ -1877,10 +1876,6 @@ retry:
 				current->pg_reclaim_breakdown.last_timestamp;
 #endif
 free_it:
-#ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
-		if (!ignore_references)
-			current->pg_reclaim_breakdown.last_timestamp = rdtsc();
-#endif
 		/*
 		 * Folio may get swapped out as a whole, need to account
 		 * all pages in it.
@@ -1888,21 +1883,22 @@ free_it:
 		nr_reclaimed += nr_pages;
 
 		// add by lsc
-        if (swap_log_flag && folio_test_swapbacked(folio)) {
-			//don't check whether folio is anon because the mapping has been cleared
-			//we may not check folio_test_swapbacked(folio) in the future to capture file folios
-			//the if statement can be replaced by swap_log_flag_2, but for straightforwardness, we keep it
+        if (swap_log_flag) {
+			//don't use folio_test_anon as the mapping has been cleared
             unsigned long pfn = folio_pfn(folio);
 			char log_msg[MAX_LOG_MSG_LEN];
 			unsigned long va = lookup_va(pfn);
-			snprintf(log_msg, sizeof(log_msg), "swap folio: pfn = %lx, va = %lx, nr_pages = %u, NUMA node = %d\n", pfn, va, nr_pages, pfn_to_nid(pfn));
-			atomic_long_inc(&swap_log_ctl.swap_log_counter);
+			snprintf(log_msg, sizeof(log_msg), "reclaim: pfn = %lx, va = %lx, nr_pages = %u, NUMA node = %d, type(anon?) = %d\n", pfn, va, nr_pages, pfn_to_nid(pfn), folio_test_swapbacked(folio));
+			atomic_long_inc(&swap_log_ctl.swap_log_counter);	// can be removed
 			remove_pa_va_mapping(pfn);
-			if (swap_log_ctl.enable_write_log_file)
-				write_swap_log(log_msg);
+			write_swap_log(log_msg);
 		}
 		// add by lsc end
 
+#ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
+		if (!ignore_references)
+			current->pg_reclaim_breakdown.last_timestamp = rdtsc();
+#endif
 		if (folio_test_large(folio) &&
 		    folio_test_large_rmappable(folio))
 			folio_undo_large_rmappable(folio);
@@ -2013,9 +2009,11 @@ keep:
 	try_to_unmap_flush();
 	free_unref_folios(&free_folios);
 #ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
-	if (!ignore_references)
+	if (!ignore_references) {
 		current->pg_reclaim_breakdown.stage_6_cycles += rdtsc() -
 			current->pg_reclaim_breakdown.last_timestamp;
+		current->pg_reclaim_breakdown.nr_pg_move_young_tmp = pgactivate;
+	}
 #endif
 
 	list_splice(&ret_folios, folio_list);
@@ -2140,12 +2138,12 @@ static unsigned long isolate_lru_folios(unsigned long nr_to_scan,
 		enum lru_list lru)
 {
 	struct list_head *src = &lruvec->lists[lru];
-	unsigned long nr_taken = 0;
+	unsigned long nr_taken = 0;	// # of pages to be isolated
 	unsigned long nr_zone_taken[MAX_NR_ZONES] = { 0 };
 	unsigned long nr_skipped[MAX_NR_ZONES] = { 0, };
 	unsigned long skipped = 0;
 	unsigned long scan, total_scan, nr_pages;
-	LIST_HEAD(folios_skipped);
+	LIST_HEAD(folios_skipped);	// rotate
 
 	total_scan = 0;
 	scan = 0;
@@ -2224,6 +2222,10 @@ move:
 	trace_mm_vmscan_lru_isolate(sc->reclaim_idx, sc->order, nr_to_scan,
 				    total_scan, skipped, nr_taken, lru);
 	update_lru_sizes(lruvec, lru, nr_zone_taken);
+
+#ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
+	current->pg_reclaim_breakdown.nr_pg_rotate += total_scan - nr_taken;
+#endif
 	return nr_taken;
 }
 
@@ -2476,7 +2478,15 @@ static unsigned long shrink_inactive_list(unsigned long nr_to_scan,
 #endif
 
 	spin_lock_irq(&lruvec->lru_lock);
+#ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
+	current->pg_reclaim_breakdown.nr_pg_move_old += 
+		move_folios_to_lru(lruvec, &folio_list) - 
+		current->pg_reclaim_breakdown.nr_pg_move_young_tmp;
+	current->pg_reclaim_breakdown.nr_pg_move_young += 
+		current->pg_reclaim_breakdown.nr_pg_move_young_tmp;
+#else
 	move_folios_to_lru(lruvec, &folio_list);
+#endif
 
 	__mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, -nr_taken);
 	item = PGSTEAL_KSWAPD + reclaimer_offset();
@@ -2494,10 +2504,8 @@ static unsigned long shrink_inactive_list(unsigned long nr_to_scan,
 #endif
 	lru_note_cost(lruvec, file, stat.nr_pageout, nr_scanned - nr_reclaimed);
 #ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
-	profile_timestamp = rdtsc();
-	current->pg_reclaim_breakdown.stage_3_cycles += profile_timestamp -
+	current->pg_reclaim_breakdown.stage_3_cycles += rdtsc() -
 		current->pg_reclaim_breakdown.last_timestamp;	// no stage 2 in 2QLRU
-	current->pg_reclaim_breakdown.last_timestamp = profile_timestamp;
 #endif
 
 	/*
@@ -2526,6 +2534,9 @@ static unsigned long shrink_inactive_list(unsigned long nr_to_scan,
 			reclaim_throttle(pgdat, VMSCAN_THROTTLE_WRITEBACK);
 	}
 
+#ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
+	current->pg_reclaim_breakdown.last_timestamp = rdtsc();
+#endif
 	sc->nr.dirty += stat.nr_dirty;
 	sc->nr.congested += stat.nr_congested;
 	sc->nr.unqueued_dirty += stat.nr_unqueued_dirty;
@@ -2537,7 +2548,6 @@ static unsigned long shrink_inactive_list(unsigned long nr_to_scan,
 
 	trace_mm_vmscan_lru_shrink_inactive(pgdat->node_id,
 			nr_scanned, nr_reclaimed, &stat, sc->priority, file);
-
 #ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
 	current->pg_reclaim_breakdown.clean_up_cycles += rdtsc() -
 		current->pg_reclaim_breakdown.last_timestamp;
@@ -2685,6 +2695,9 @@ static void shrink_active_list(unsigned long nr_to_scan,
 		current->pg_reclaim_breakdown.last_timestamp - 
 		current->pg_reclaim_breakdown.cond_resched_cycles;	// no stage 2 in 2QLRU
 	current->pg_reclaim_breakdown.cond_resched_cycles = 0;
+	current->pg_reclaim_breakdown.nr_pg_demotion += nr_deactivate;
+	current->pg_reclaim_breakdown.nr_pg_rotate += nr_activate;
+	current->pg_reclaim_breakdown.nr_pg_nolru += nr_taken - nr_activate - nr_deactivate;
 #endif
 }
 
