@@ -95,8 +95,8 @@ struct page_reclaim_breakdown {
 	unsigned long long clean_up_cycles;
 
 	// before reclaim
-	unsigned long long nr_pg_promotion;
-	unsigned long long nr_pg_demotion;
+	unsigned long long nr_pg_promotion;	// for 2QLRU, always 0; for MGLRU, only count real movements
+	unsigned long long nr_pg_demotion;	// for MGLRU, always 0
 	unsigned long long nr_pg_rotate;
 	unsigned long long nr_pg_nolru;	// isolated, then unevictable or freed
 	// after reclaim, the src must be isolated (inactive list)

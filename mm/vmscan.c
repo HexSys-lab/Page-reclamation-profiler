@@ -1256,11 +1256,15 @@ static unsigned int shrink_folio_list(struct list_head *folio_list,
 	}
 
 	bool swap_log_flag = false;
-
+	char* folio_list_type = NULL;
 	if (swap_log_ctl.enable_swap_log && swap_log_memcg && folio_memcg(lru_to_folio(folio_list))==swap_log_memcg) {
 		//we may also use sc->target_mem_cgroup instead of folio_memcg to check the current memcg
 		swap_log_flag = true;
 		atomic_long_inc(&shrink_folio_list_counter);
+		if (folio_is_file_lru(lru_to_folio(folio_list)))
+			folio_list_type = "file";
+		else
+			folio_list_type = "anon";
 	}
 	// add by lsc end
 
@@ -1888,7 +1892,9 @@ free_it:
             unsigned long pfn = folio_pfn(folio);
 			char log_msg[MAX_LOG_MSG_LEN];
 			unsigned long va = lookup_va(pfn);
-			snprintf(log_msg, sizeof(log_msg), "reclaim: pfn = %lx, va = %lx, nr_pages = %u, NUMA node = %d, type(anon?) = %d\n", pfn, va, nr_pages, pfn_to_nid(pfn), folio_test_swapbacked(folio));
+			snprintf(log_msg, sizeof(log_msg), 
+				"reclaim: pfn = %lx, va = %lx, nr_pages = %u, NUMA node = %d, type = %s\n", 
+				pfn, va, nr_pages, pfn_to_nid(pfn), folio_list_type);
 			atomic_long_inc(&swap_log_ctl.swap_log_counter);	// can be removed
 			remove_pa_va_mapping(pfn);
 			write_swap_log(log_msg);
@@ -4321,6 +4327,9 @@ static bool inc_min_seq(struct lruvec *lruvec, int type, bool can_swap)
 
 			new_gen = folio_inc_gen(lruvec, folio, false);
 			list_move_tail(&folio->lru, &lrugen->folios[new_gen][type][zone]);
+#ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
+			current->pg_reclaim_breakdown.nr_pg_promotion += folio_nr_pages(folio);
+#endif
 
 			if (!--remaining)
 				return false;
@@ -4914,6 +4923,9 @@ static bool sort_folio(struct lruvec *lruvec, struct folio *folio, struct scan_c
 		folio_set_unevictable(folio);
 		lruvec_add_folio(lruvec, folio);
 		__count_vm_events(UNEVICTABLE_PGCULLED, delta);
+#ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
+		current->pg_reclaim_breakdown.nr_pg_nolru += delta;
+#endif
 		return true;
 	}
 
@@ -4923,8 +4935,18 @@ static bool sort_folio(struct lruvec *lruvec, struct folio *folio, struct scan_c
 		VM_WARN_ON_ONCE_FOLIO(!success, folio);
 		folio_set_swapbacked(folio);
 		lruvec_add_folio_tail(lruvec, folio);
+#ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
+		if (gen != folio_lru_gen(folio))
+			current->pg_reclaim_breakdown.nr_pg_promotion += delta;
+		else
+			current->pg_reclaim_breakdown.nr_pg_rotate += delta;
+#endif
 		return true;
 	}
+
+#ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
+	current->pg_reclaim_breakdown.nr_pg_promotion += delta;
+#endif
 
 	/* promoted */
 	if (gen != lru_gen_from_seq(lrugen->min_seq[type])) {
@@ -4959,6 +4981,10 @@ static bool sort_folio(struct lruvec *lruvec, struct folio *folio, struct scan_c
 		return true;
 	}
 
+#ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
+	current->pg_reclaim_breakdown.nr_pg_promotion -= delta;
+#endif
+	
 	return false;
 }
 
@@ -5010,7 +5036,7 @@ static int scan_folios(struct lruvec *lruvec, struct scan_control *sc,
 	struct lru_gen_folio *lrugen = &lruvec->lrugen;
 	struct mem_cgroup *memcg = lruvec_memcg(lruvec);
 
-	VM_WARN_ON_ONCE(!list_empty(list));
+	VM_WARN_ON_ONCE(!list_empty(list));	// store isolated pages
 
 	if (get_nr_gens(lruvec, type) == MIN_NR_GENS)
 		return 0;
@@ -5018,7 +5044,7 @@ static int scan_folios(struct lruvec *lruvec, struct scan_control *sc,
 	gen = lru_gen_from_seq(lrugen->min_seq[type]);
 
 	for (i = MAX_NR_ZONES; i > 0; i--) {
-		LIST_HEAD(moved);
+		LIST_HEAD(moved);	// rotate list
 		int skipped_zone = 0;
 		int zone = (sc->reclaim_idx + i) % MAX_NR_ZONES;
 		struct list_head *head = &lrugen->folios[gen][type][zone];
@@ -5037,7 +5063,7 @@ static int scan_folios(struct lruvec *lruvec, struct scan_control *sc,
 			if (sort_folio(lruvec, folio, sc, tier))
 				sorted += delta;
 			else if (isolate_folio(lruvec, folio, sc)) {
-				list_add(&folio->lru, list);
+				list_add(&folio->lru, list);	//isolated pages
 				isolated += delta;
 			} else {
 				list_move(&folio->lru, &moved);
@@ -5069,6 +5095,9 @@ static int scan_folios(struct lruvec *lruvec, struct scan_control *sc,
 	trace_mm_vmscan_lru_isolate(sc->reclaim_idx, sc->order, MAX_LRU_BATCH,
 				scanned, skipped, isolated,
 				type ? LRU_INACTIVE_FILE : LRU_INACTIVE_ANON);
+#ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
+	current->pg_reclaim_breakdown.nr_pg_rotate += skipped;
+#endif
 
 	/*
 	 * There might not be eligible folios due to reclaim_idx. Check the
@@ -5220,7 +5249,7 @@ retry:
 			type ? LRU_INACTIVE_FILE : LRU_INACTIVE_ANON);
 
 	list_for_each_entry_safe_reverse(folio, next, &list, lru) {
-		if (!folio_evictable(folio)) {
+		if (!folio_evictable(folio)) {	// we don't have a counter for this case
 			list_del(&folio->lru);
 			folio_putback_lru(folio);
 			continue;
@@ -5250,7 +5279,15 @@ retry:
 
 	spin_lock_irq(&lruvec->lru_lock);
 
+#ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
+	current->pg_reclaim_breakdown.nr_pg_move_old += 
+		move_folios_to_lru(lruvec, &list) - 
+		current->pg_reclaim_breakdown.nr_pg_move_young_tmp;
+	current->pg_reclaim_breakdown.nr_pg_move_young += 
+		current->pg_reclaim_breakdown.nr_pg_move_young_tmp;
+#else
 	move_folios_to_lru(lruvec, &list);
+#endif
 
 	walk = current->reclaim_state->mm_walk;
 	if (walk && walk->batched) {
@@ -5265,13 +5302,12 @@ retry:
 	__count_vm_events(PGSTEAL_ANON + type, reclaimed);
 
 	spin_unlock_irq(&lruvec->lru_lock);
-
-	list_splice_init(&clean, &list);
-
 #ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
 	current->pg_reclaim_breakdown.clean_up_cycles += rdtsc() -
 		current->pg_reclaim_breakdown.last_timestamp;
 #endif
+
+	list_splice_init(&clean, &list);	// second try on isolated pages
 
 	if (!list_empty(&list)) {
 		skip_retry = true;
