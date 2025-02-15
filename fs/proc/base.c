@@ -221,20 +221,25 @@ static int proc_pid_page_reclaim_breakdown(struct seq_file *m, struct pid_namesp
 	struct page_reclaim_breakdown pg_reclaim_breakdown = t->pg_reclaim_breakdown;
 
 	seq_printf(m,
-		"stage_2_cycles: %llu\n"
-		"stage_3_cycles: %llu\n"
-		"stage_4_cycles: %llu\n"
-		"stage_5_cycles: %llu\n"
-		"stage_6_cycles: %llu\n"
+		"Time breakdown\n"
+		"stage_2_cycles: %llu\t"
+		"stage_3_cycles: %llu\t"
+		"stage_4_cycles: %llu\t"
+		"stage_5_cycles: %llu\t"
+		"stage_6_cycles: %llu\t"
 		"clean_up_cycles: %llu\n"
-		"\n"
+
 		"Before reclaim\n"
-		"nr_pg_promotion: %llu\n"
-		"nr_pg_demotion: %llu\n"
-		"nr_pg_rotate: %llu\n"
-		"nr_pg_nolru: %llu\n"
+		"nr_pg_scan: %llu\t"
+		"nr_pte_scan: %llu\t"
+		"nr_pg_promotion: %llu\t"
+		"nr_pg_demotion: %llu\t"
+		"nr_pg_rotate: %llu\t"
+		"nr_pg_nolru: %llu\t"
+		"nr_pg_reclaim_candidates: %llu\n"
+		
 		"After reclaim\n"
-		"nr_pg_move_old: %llu\n"
+		"nr_pg_move_old: %llu\t"
 		"nr_pg_move_young: %llu\n"
 		"\n"
 		,
@@ -244,13 +249,18 @@ static int proc_pid_page_reclaim_breakdown(struct seq_file *m, struct pid_namesp
 		pg_reclaim_breakdown.stage_5_cycles,
 		pg_reclaim_breakdown.stage_6_cycles,
 		pg_reclaim_breakdown.clean_up_cycles,
+
+		pg_reclaim_breakdown.nr_pg_scan,
+		pg_reclaim_breakdown.nr_pte_scan,
 		pg_reclaim_breakdown.nr_pg_promotion,
 		pg_reclaim_breakdown.nr_pg_demotion,
 		pg_reclaim_breakdown.nr_pg_rotate,
 		pg_reclaim_breakdown.nr_pg_nolru,
+		pg_reclaim_breakdown.nr_pg_reclaim_candidates,
+		
 		pg_reclaim_breakdown.nr_pg_move_old,
 		pg_reclaim_breakdown.nr_pg_move_young
-		);
+	);
 
 	t->pg_reclaim_breakdown = (struct page_reclaim_breakdown){0};
 

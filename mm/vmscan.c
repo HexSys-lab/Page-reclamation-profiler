@@ -79,13 +79,11 @@ extern struct cgroup *swap_log_cgroup;
 struct mem_cgroup *swap_log_memcg = NULL;
 EXPORT_SYMBOL(swap_log_memcg);
 
-atomic_long_t shrink_folio_list_counter = ATOMIC_INIT(0);
-EXPORT_SYMBOL(shrink_folio_list_counter);
-
 struct swap_log_control swap_log_ctl = {
 	.enable_swap_log = false,
-	.pa_va_ht_size = ATOMIC_INIT(0),
-	.swap_log_counter = ATOMIC_INIT(0),
+	.swap_log_counter = ATOMIC_LONG_INIT(0),
+	.shrink_folio_list_counter = ATOMIC_LONG_INIT(0),
+	.pa_va_ht_size_max = 0,
 };
 EXPORT_SYMBOL(swap_log_ctl);
 
@@ -97,8 +95,7 @@ struct pa_va_entry {
 
 #define PA_VA_HASH_BITS 20
 DEFINE_HASHTABLE(pa_va_table, PA_VA_HASH_BITS);
-unsigned long swap_log_pa_va_ht_size_max = 0;
-EXPORT_SYMBOL(swap_log_pa_va_ht_size_max);
+atomic_long_t pa_va_ht_size = ATOMIC_LONG_INIT(0);
 
 int add_or_update_pa_va_mapping(unsigned long pfn, unsigned long va)
 {
@@ -122,11 +119,10 @@ int add_or_update_pa_va_mapping(unsigned long pfn, unsigned long va)
     entry->pfn = pfn;
     entry->va = va;
     hash_add(pa_va_table, &entry->hnode_pfn, pfn);
-	atomic_long_inc(&swap_log_ctl.pa_va_ht_size);
-	unsigned long ht_size = atomic_long_read(&swap_log_ctl.pa_va_ht_size);
+	long ht_size = atomic_long_inc_return(&pa_va_ht_size);
 
-	if (unlikely(ht_size - READ_ONCE(swap_log_pa_va_ht_size_max) > 20))
-		WRITE_ONCE(swap_log_pa_va_ht_size_max, ht_size);
+	if (unlikely((ht_size - swap_log_ctl.pa_va_ht_size_max) > 20))
+		swap_log_ctl.pa_va_ht_size_max = ht_size;
 
     return 0;
 }
@@ -154,7 +150,7 @@ void remove_pa_va_mapping(unsigned long pfn)
         if (entry->pfn == pfn) {
             hash_del(&entry->hnode_pfn);
             kfree(entry);
-			atomic_long_dec(&swap_log_ctl.pa_va_ht_size);
+			atomic_long_dec(&pa_va_ht_size);
             break;
         }
     }
@@ -171,8 +167,7 @@ void clear_pa_va_table(void)
         kfree(entry);
     }
 
-	atomic_long_set(&swap_log_ctl.pa_va_ht_size, 0);
-	WRITE_ONCE(swap_log_pa_va_ht_size_max, 0);
+	atomic_long_set(&pa_va_ht_size, 0);
 }
 EXPORT_SYMBOL(clear_pa_va_table);
 // add by lsc end
@@ -1260,7 +1255,7 @@ static unsigned int shrink_folio_list(struct list_head *folio_list,
 	if (swap_log_ctl.enable_swap_log && swap_log_memcg && folio_memcg(lru_to_folio(folio_list))==swap_log_memcg) {
 		//we may also use sc->target_mem_cgroup instead of folio_memcg to check the current memcg
 		swap_log_flag = true;
-		atomic_long_inc(&shrink_folio_list_counter);
+		atomic_long_inc(&swap_log_ctl.shrink_folio_list_counter);
 		if (folio_is_file_lru(lru_to_folio(folio_list)))
 			folio_list_type = "file";
 		else
@@ -2151,8 +2146,8 @@ static unsigned long isolate_lru_folios(unsigned long nr_to_scan,
 	unsigned long scan, total_scan, nr_pages;
 	LIST_HEAD(folios_skipped);	// rotate
 
-	total_scan = 0;
-	scan = 0;
+	total_scan = 0;	// the real number of pages scanned
+	scan = 0;	// used to compare with nr_to_scan, not include scanned but skipped pages
 	while (scan < nr_to_scan && !list_empty(src)) {
 		struct list_head *move_to = src;
 		struct folio *folio;
@@ -2231,6 +2226,7 @@ move:
 
 #ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
 	current->pg_reclaim_breakdown.nr_pg_rotate += total_scan - nr_taken;
+	current->pg_reclaim_breakdown.nr_pg_scan += total_scan;
 #endif
 	return nr_taken;
 }
@@ -2480,6 +2476,7 @@ static unsigned long shrink_inactive_list(unsigned long nr_to_scan,
 	nr_reclaimed = shrink_folio_list(&folio_list, pgdat, sc, &stat, false);
 
 #ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
+	current->pg_reclaim_breakdown.nr_pg_reclaim_candidates += nr_taken;
 	current->pg_reclaim_breakdown.last_timestamp = rdtsc();
 #endif
 
@@ -2701,8 +2698,8 @@ static void shrink_active_list(unsigned long nr_to_scan,
 		current->pg_reclaim_breakdown.last_timestamp - 
 		current->pg_reclaim_breakdown.cond_resched_cycles;	// no stage 2 in 2QLRU
 	current->pg_reclaim_breakdown.cond_resched_cycles = 0;
-	current->pg_reclaim_breakdown.nr_pg_demotion += nr_deactivate;
-	current->pg_reclaim_breakdown.nr_pg_rotate += nr_activate;
+	current->pg_reclaim_breakdown.nr_pg_demotion += nr_deactivate;	// active -> inactive
+	current->pg_reclaim_breakdown.nr_pg_rotate += nr_activate;	// active -> active = rotate
 	current->pg_reclaim_breakdown.nr_pg_nolru += nr_taken - nr_activate - nr_deactivate;
 #endif
 }
@@ -4012,6 +4009,10 @@ restart:
 	arch_leave_lazy_mmu_mode();
 	pte_unmap_unlock(pte, ptl);
 
+#ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
+	current->pg_reclaim_breakdown.nr_pte_scan += total;
+#endif
+	
 	return suitable_to_scan(total, young);
 }
 
@@ -4328,7 +4329,9 @@ static bool inc_min_seq(struct lruvec *lruvec, int type, bool can_swap)
 			new_gen = folio_inc_gen(lruvec, folio, false);
 			list_move_tail(&folio->lru, &lrugen->folios[new_gen][type][zone]);
 #ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
-			current->pg_reclaim_breakdown.nr_pg_promotion += folio_nr_pages(folio);
+			int nr_pages = folio_nr_pages(folio);
+			current->pg_reclaim_breakdown.nr_pg_promotion += nr_pages;
+			current->pg_reclaim_breakdown.nr_pg_scan += nr_pages;
 #endif
 
 			if (!--remaining)
@@ -4759,6 +4762,10 @@ void lru_gen_look_around(struct page_vma_mapped_walk *pvmw)
 	arch_leave_lazy_mmu_mode();
 	mem_cgroup_unlock_pages();
 
+#ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
+	current->pg_reclaim_breakdown.nr_pte_scan += i;
+#endif
+
 	/* feedback from rmap walkers to page table walkers */
 	if (mm_state && suitable_to_scan(i, young))
 		update_bloom_filter(mm_state, max_seq, pvmw->pmd);
@@ -5097,6 +5104,8 @@ static int scan_folios(struct lruvec *lruvec, struct scan_control *sc,
 				type ? LRU_INACTIVE_FILE : LRU_INACTIVE_ANON);
 #ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
 	current->pg_reclaim_breakdown.nr_pg_rotate += skipped;
+	current->pg_reclaim_breakdown.nr_pg_scan += scanned;
+	current->pg_reclaim_breakdown.nr_pg_reclaim_candidates += isolated;
 #endif
 
 	/*
@@ -5311,6 +5320,10 @@ retry:
 
 	if (!list_empty(&list)) {
 		skip_retry = true;
+#ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
+		list_for_each_entry(folio, &list, lru)
+			current->pg_reclaim_breakdown.nr_pg_reclaim_candidates += folio_nr_pages(folio);
+#endif	
 		goto retry;
 	}
 
