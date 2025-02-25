@@ -127,7 +127,7 @@ int add_or_update_pa_va_mapping(unsigned long pfn, unsigned long va)
     return 0;
 }
 
-unsigned long lookup_va(unsigned long pfn)
+static unsigned long lookup_va(unsigned long pfn)
 {
     struct pa_va_entry *entry;
     unsigned long va = 0;
@@ -142,7 +142,7 @@ unsigned long lookup_va(unsigned long pfn)
     return va;
 }
 
-void remove_pa_va_mapping(unsigned long pfn)
+static void remove_pa_va_mapping(unsigned long pfn)
 {
     struct pa_va_entry *entry;
 
@@ -1125,7 +1125,7 @@ int init_swap_log_file(void)
     filp_close(file, NULL);
 
     // Reopen the file with O_APPEND for subsequent writes
-    swap_log_file = filp_open("/home/cc/swap_log.txt", O_WRONLY | O_CREAT | O_APPEND, 0666);
+    swap_log_file = filp_open("/home/cc/swap_log.txt", O_WRONLY | O_CREAT | O_APPEND | O_LARGEFILE, 0666);
     if (IS_ERR(swap_log_file)) {
         printk(KERN_ERR "Failed to reopen log file\n");
         swap_log_file = NULL;
@@ -1164,7 +1164,7 @@ static void flush_swap_log_buffer(const char (*log_msgs)[MAX_LOG_MSG_LEN], int l
 
     ret = kernel_write(swap_log_file, buffer, total_len, &pos);
     if (unlikely(ret < 0)) {
-        printk(KERN_ERR "Failed to write to log file\n");
+        printk(KERN_ERR "Failed to write to log file: %ld\n", ret);
     }
 
     kfree(buffer);
