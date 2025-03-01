@@ -1975,7 +1975,7 @@ void try_to_unmap(struct folio *folio, enum ttu_flags flags)
 
 	if (flags & TTU_RMAP_LOCKED)
 		rmap_walk_locked(folio, &rwc);
-	else
+	else	// when caller is shrink_folio_list, enter this branch
 		rmap_walk(folio, &rwc);
 }
 
@@ -2614,7 +2614,14 @@ static void rmap_walk_anon(struct folio *folio,
 		unsigned long address = vma_address(&folio->page, vma);
 
 		VM_BUG_ON_VMA(address == -EFAULT, vma);
+#ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
+		current->pg_reclaim_breakdown.rmap_timestamp = rdtsc();
+#endif
 		cond_resched();
+#ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
+		current->pg_reclaim_breakdown.rmap_cond_resched_cycles +=
+			rdtsc() - current->pg_reclaim_breakdown.rmap_timestamp;
+#endif
 
 		if (rwc->invalid_vma && rwc->invalid_vma(vma, rwc->arg))
 			continue;
@@ -2675,7 +2682,14 @@ lookup:
 		unsigned long address = vma_address(&folio->page, vma);
 
 		VM_BUG_ON_VMA(address == -EFAULT, vma);
+#ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
+		current->pg_reclaim_breakdown.rmap_timestamp = rdtsc();
+#endif
 		cond_resched();
+#ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
+		current->pg_reclaim_breakdown.rmap_cond_resched_cycles +=
+			rdtsc() - current->pg_reclaim_breakdown.rmap_timestamp;
+#endif
 
 		if (rwc->invalid_vma && rwc->invalid_vma(vma, rwc->arg))
 			continue;

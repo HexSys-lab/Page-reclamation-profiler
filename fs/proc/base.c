@@ -236,7 +236,8 @@ static int proc_pid_page_reclaim_breakdown(struct seq_file *m, struct pid_namesp
 		"nr_pg_demotion: %llu\t"
 		"nr_pg_rotate: %llu\t"
 		"nr_pg_nolru: %llu\t"
-		"nr_pg_reclaim_candidates: %llu\n"
+		"nr_pg_reclaim_candidates: %llu\t"
+		"nr_pg_reclaim_success: %llu\n"
 		
 		"After reclaim\n"
 		"nr_pg_move_old: %llu\t"
@@ -257,6 +258,7 @@ static int proc_pid_page_reclaim_breakdown(struct seq_file *m, struct pid_namesp
 		pg_reclaim_breakdown.nr_pg_rotate,
 		pg_reclaim_breakdown.nr_pg_nolru,
 		pg_reclaim_breakdown.nr_pg_reclaim_candidates,
+		pg_reclaim_breakdown.nr_pg_reclaim_success,
 		
 		pg_reclaim_breakdown.nr_pg_move_old,
 		pg_reclaim_breakdown.nr_pg_move_young

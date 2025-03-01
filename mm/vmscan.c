@@ -81,8 +81,6 @@ EXPORT_SYMBOL(swap_log_memcg);
 
 struct swap_log_control swap_log_ctl = {
 	.enable_swap_log = false,
-	.swap_log_counter = ATOMIC_LONG_INIT(0),
-	.shrink_folio_list_counter = ATOMIC_LONG_INIT(0),
 	.pa_va_ht_size_max = 0,
 };
 EXPORT_SYMBOL(swap_log_ctl);
@@ -1117,7 +1115,7 @@ static int swap_log_buffer_size = 0;
 int init_swap_log_file(void)
 {
 	// Open the file with O_TRUNC to clear the file content initially
-    struct file *file = filp_open("/home/cc/swap_log.txt", O_WRONLY | O_CREAT | O_TRUNC, 0666);
+    struct file *file = filp_open("/home/cc/swap_log.txt", O_WRONLY | O_CREAT | O_TRUNC | O_LARGEFILE, 0666);
     if (IS_ERR(file)) {
         printk(KERN_ERR "Failed to open log file\n");
         return PTR_ERR(file);
@@ -1252,11 +1250,11 @@ static unsigned int shrink_folio_list(struct list_head *folio_list,
 
 	bool swap_log_flag = false;
 	char* folio_list_type = NULL;
-	if (swap_log_ctl.enable_swap_log && swap_log_memcg && folio_memcg(lru_to_folio(folio_list))==swap_log_memcg) {
+	struct folio *temp_folio = lru_to_folio(folio_list);
+	if (swap_log_ctl.enable_swap_log && swap_log_memcg && folio_memcg(temp_folio)==swap_log_memcg) {
 		//we may also use sc->target_mem_cgroup instead of folio_memcg to check the current memcg
 		swap_log_flag = true;
-		atomic_long_inc(&swap_log_ctl.shrink_folio_list_counter);
-		if (folio_is_file_lru(lru_to_folio(folio_list)))
+		if (folio_is_file_lru(temp_folio))
 			folio_list_type = "file";
 		else
 			folio_list_type = "anon";
@@ -1449,17 +1447,20 @@ retry:
 			}
 		}
 
-		if (!ignore_references)
-			references = folio_check_references(folio, sc);	// include rmap look-around (stage 2)
-
-#ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
 		if (!ignore_references) {
+#ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
+			current->pg_reclaim_breakdown.rmap_cond_resched_cycles = 0;
+#endif			
+			references = folio_check_references(folio, sc);	// include rmap look-around (stage 2)
+#ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
 			profile_timestamp = rdtsc();
 			current->pg_reclaim_breakdown.stage_4_cycles += profile_timestamp -
-				current->pg_reclaim_breakdown.last_timestamp;
+				current->pg_reclaim_breakdown.last_timestamp - 
+				current->pg_reclaim_breakdown.rmap_cond_resched_cycles;
+			current->pg_reclaim_breakdown.rmap_cond_resched_cycles = 0;
 			current->pg_reclaim_breakdown.last_timestamp = profile_timestamp;
-		}
 #endif
+		}
 
 		switch (references) {
 		case FOLIOREF_ACTIVATE:
@@ -1621,7 +1622,15 @@ retry:
 			if (folio_test_pmd_mappable(folio))
 				flags |= TTU_SPLIT_HUGE_PMD;
 
+#ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
+			current->pg_reclaim_breakdown.rmap_cond_resched_cycles = 0;
+#endif
 			try_to_unmap(folio, flags);		//where PA-VA mapping is recorded
+#ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
+			if (!ignore_references)
+				current->pg_reclaim_breakdown.stage_5_cycles -= current->pg_reclaim_breakdown.rmap_cond_resched_cycles;
+			current->pg_reclaim_breakdown.rmap_cond_resched_cycles = 0;
+#endif
 			if (folio_mapped(folio)) {
 				stat->nr_unmap_fail += nr_pages;
 				if (!was_swapbacked &&
@@ -1890,7 +1899,6 @@ free_it:
 			snprintf(log_msg, sizeof(log_msg), 
 				"reclaim: pfn = %lx, va = %lx, nr_pages = %u, NUMA node = %d, type = %s\n", 
 				pfn, va, nr_pages, pfn_to_nid(pfn), folio_list_type);
-			atomic_long_inc(&swap_log_ctl.swap_log_counter);	// can be removed
 			remove_pa_va_mapping(pfn);
 			write_swap_log(log_msg);
 		}
@@ -2477,6 +2485,7 @@ static unsigned long shrink_inactive_list(unsigned long nr_to_scan,
 
 #ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
 	current->pg_reclaim_breakdown.nr_pg_reclaim_candidates += nr_taken;
+	current->pg_reclaim_breakdown.nr_pg_reclaim_success += nr_reclaimed;
 	current->pg_reclaim_breakdown.last_timestamp = rdtsc();
 #endif
 
@@ -2621,6 +2630,7 @@ static void shrink_active_list(unsigned long nr_to_scan,
 
 #ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
 	current->pg_reclaim_breakdown.cond_resched_cycles = 0;
+	current->pg_reclaim_breakdown.rmap_cond_resched_cycles = 0;
 #endif
 	while (!list_empty(&l_hold)) {
 		struct folio *folio;
@@ -2696,8 +2706,11 @@ static void shrink_active_list(unsigned long nr_to_scan,
 #ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
 	current->pg_reclaim_breakdown.stage_3_cycles += rdtsc() -
 		current->pg_reclaim_breakdown.last_timestamp - 
-		current->pg_reclaim_breakdown.cond_resched_cycles;	// no stage 2 in 2QLRU
+		current->pg_reclaim_breakdown.cond_resched_cycles - 
+		current->pg_reclaim_breakdown.rmap_cond_resched_cycles;
 	current->pg_reclaim_breakdown.cond_resched_cycles = 0;
+	current->pg_reclaim_breakdown.rmap_cond_resched_cycles = 0;
+
 	current->pg_reclaim_breakdown.nr_pg_demotion += nr_deactivate;	// active -> inactive
 	current->pg_reclaim_breakdown.nr_pg_rotate += nr_activate;	// active -> active = rotate
 	current->pg_reclaim_breakdown.nr_pg_nolru += nr_taken - nr_activate - nr_deactivate;
@@ -5250,6 +5263,7 @@ retry:
 	reclaimed = shrink_folio_list(&list, pgdat, sc, &stat, false);
 
 #ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
+	current->pg_reclaim_breakdown.nr_pg_reclaim_success += reclaimed;
 	current->pg_reclaim_breakdown.last_timestamp = rdtsc();
 #endif
 	sc->nr_reclaimed += reclaimed;
@@ -5311,12 +5325,13 @@ retry:
 	__count_vm_events(PGSTEAL_ANON + type, reclaimed);
 
 	spin_unlock_irq(&lruvec->lru_lock);
+
+	list_splice_init(&clean, &list);	// second try on isolated pages
+
 #ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
 	current->pg_reclaim_breakdown.clean_up_cycles += rdtsc() -
 		current->pg_reclaim_breakdown.last_timestamp;
 #endif
-
-	list_splice_init(&clean, &list);	// second try on isolated pages
 
 	if (!list_empty(&list)) {
 		skip_retry = true;

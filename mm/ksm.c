@@ -3121,7 +3121,14 @@ again:
 		struct anon_vma_chain *vmac;
 		struct vm_area_struct *vma;
 
+#ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
+		current->pg_reclaim_breakdown.rmap_timestamp = rdtsc();
+#endif
 		cond_resched();
+#ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
+		current->pg_reclaim_breakdown.rmap_cond_resched_cycles +=
+			rdtsc() - current->pg_reclaim_breakdown.rmap_timestamp;
+#endif
 		if (!anon_vma_trylock_read(anon_vma)) {
 			if (rwc->try_lock) {
 				rwc->contended = true;
@@ -3133,7 +3140,14 @@ again:
 					       0, ULONG_MAX) {
 			unsigned long addr;
 
+#ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
+			current->pg_reclaim_breakdown.rmap_timestamp = rdtsc();
+#endif
 			cond_resched();
+#ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
+			current->pg_reclaim_breakdown.rmap_cond_resched_cycles +=
+				rdtsc() - current->pg_reclaim_breakdown.rmap_timestamp;
+#endif
 			vma = vmac->vma;
 
 			/* Ignore the stable/unstable/sqnr flags */

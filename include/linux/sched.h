@@ -85,7 +85,8 @@ struct page_reclaim_breakdown {
 	// intermidiate variables, not used in the final output
 	unsigned long long last_timestamp;
 	unsigned long long cond_resched_timestamp;
-	unsigned long long rmap_timestamp;	// used by lrugen look-around
+	unsigned long long rmap_timestamp;	// used by rmap processes like lru_gen_look_around
+	unsigned long long rmap_cond_resched_cycles;	// not accumulative
 	unsigned long long cond_resched_cycles;		// not accumulative
 	unsigned long long nr_pg_move_young_tmp;	// not accumulative
 
@@ -105,7 +106,8 @@ struct page_reclaim_breakdown {
 	unsigned long long nr_pg_demotion;	// for MGLRU, always 0
 	unsigned long long nr_pg_rotate;
 	unsigned long long nr_pg_nolru;	// isolated, then unevictable or freed; 0 mostly
-	unsigned long long nr_pg_reclaim_candidates;	// # of pages processed by shrink_folio_list
+	unsigned long long nr_pg_reclaim_candidates;	// # of pages fed to shrink_folio_list
+	unsigned long long nr_pg_reclaim_success;	// # of pages successfully reclaimed
 
 	// after reclaim; the src must be isolated (inactive list/oldest gen)
 	unsigned long long nr_pg_move_old;
