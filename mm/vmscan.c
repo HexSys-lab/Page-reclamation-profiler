@@ -81,6 +81,7 @@ EXPORT_SYMBOL(swap_log_memcg);
 
 struct swap_log_control swap_log_ctl = {
 	.enable_swap_log = false,
+	.start_write_log = false,
 	.pa_va_ht_size_max = 0,
 };
 EXPORT_SYMBOL(swap_log_ctl);
@@ -1107,10 +1108,8 @@ static bool may_enter_fs(struct folio *folio, gfp_t gfp_mask)
 
 // add by lsc, only used for write swap log
 static struct file *swap_log_file = NULL;
-#define MAX_LOG_ENTRIES 1000
+#define MAX_LOG_ENTRY	1024
 #define MAX_LOG_MSG_LEN 128
-static char swap_log_buffer[MAX_LOG_ENTRIES][MAX_LOG_MSG_LEN];
-static int swap_log_buffer_size = 0;
 
 int init_swap_log_file(void)
 {
@@ -1133,21 +1132,20 @@ int init_swap_log_file(void)
 }
 EXPORT_SYMBOL(init_swap_log_file);
 
-static void flush_swap_log_buffer(const char (*log_msgs)[MAX_LOG_MSG_LEN], int log_count)
+void flush_swap_log_buffer(struct task_struct *task)
 {
     loff_t pos = 0;
     ssize_t ret;
     size_t total_len = 0;
     int i;
+	static DEFINE_SPINLOCK(swap_log_file_lock);
 
     if (unlikely(!swap_log_file)) {
         printk(KERN_ERR "Log file is not opened\n");
         return;
     }
 
-    for (i = 0; i < log_count; i++) {
-        total_len += strlen(log_msgs[i]);
-    }
+	total_len = task->swap_log_buffer_size * MAX_LOG_MSG_LEN;
 
     char *buffer = kmalloc(total_len + 1, GFP_KERNEL); // +1 for the null terminator
     if (!buffer) {
@@ -1156,65 +1154,47 @@ static void flush_swap_log_buffer(const char (*log_msgs)[MAX_LOG_MSG_LEN], int l
     }
 
     buffer[0] = '\0'; // Initialize the buffer with an empty string
-    for (i = 0; i < log_count; i++) {
-        strcat(buffer, log_msgs[i]);
+    for (i = 0; i < task->swap_log_buffer_size; i++) {
+        strcat(buffer, task->swap_log_buffer[i]);
     }
+	total_len = strlen(buffer);
 
+	spin_lock(&swap_log_file_lock);
     ret = kernel_write(swap_log_file, buffer, total_len, &pos);
+	spin_unlock(&swap_log_file_lock);
     if (unlikely(ret < 0)) {
         printk(KERN_ERR "Failed to write to log file: %ld\n", ret);
     }
 
     kfree(buffer);
+	task->swap_log_buffer_size = 0;
 }
-
-void close_swap_log_file(void)
-{
-    if (swap_log_file) {
-		flush_swap_log_buffer(swap_log_buffer, swap_log_buffer_size);
-        swap_log_buffer_size = 0;
-        filp_close(swap_log_file, NULL);
-        swap_log_file = NULL;
-    }
-}
-EXPORT_SYMBOL(close_swap_log_file);
 
 static void write_swap_log(const char *log_msg)
 {
-    static DEFINE_SPINLOCK(swap_log_buffer_lock);
-
     if (unlikely(!swap_log_file)) {
         printk(KERN_ERR "Log file is not opened\n");
         return;
     }
 
-    spin_lock(&swap_log_buffer_lock);
-
-    // Copy the log message to the buffer
-    strncpy(swap_log_buffer[swap_log_buffer_size], log_msg, MAX_LOG_MSG_LEN - 1);
-    swap_log_buffer[swap_log_buffer_size][MAX_LOG_MSG_LEN - 1] = '\0'; // Ensure null-termination
-    swap_log_buffer_size++;
+	// Copy the log message to the buffer
+    strncpy(current->swap_log_buffer[current->swap_log_buffer_size], log_msg, MAX_LOG_MSG_LEN - 1);
+    current->swap_log_buffer[current->swap_log_buffer_size][MAX_LOG_MSG_LEN - 1] = '\0'; // Ensure null-termination
+    current->swap_log_buffer_size++;
 
     // Check if the buffer is full
-    if (unlikely(swap_log_buffer_size == MAX_LOG_ENTRIES)) {
-        char (*temp_buffer)[MAX_LOG_MSG_LEN] = kmalloc(sizeof(swap_log_buffer), GFP_KERNEL);
-        if (!temp_buffer) {
-            printk(KERN_ERR "Failed to allocate memory for temp buffer\n");
-            spin_unlock(&swap_log_buffer_lock);
-            return;
-        }
-        memcpy(temp_buffer, swap_log_buffer, sizeof(swap_log_buffer));
+    if (unlikely(current->swap_log_buffer_size == MAX_LOG_ENTRY))
+        flush_swap_log_buffer(current);
+}
 
-        swap_log_buffer_size = 0;
-
-        spin_unlock(&swap_log_buffer_lock); // Release spinlock before flushing
-
-        flush_swap_log_buffer(temp_buffer, MAX_LOG_ENTRIES);
-		kfree(temp_buffer);
-    } else {
-        spin_unlock(&swap_log_buffer_lock);
+void close_swap_log_file(void)
+{
+    if (swap_log_file) {
+        filp_close(swap_log_file, NULL);
+        swap_log_file = NULL;
     }
 }
+EXPORT_SYMBOL(close_swap_log_file);
 // add by lsc end
 
 /*
@@ -1896,11 +1876,13 @@ free_it:
             unsigned long pfn = folio_pfn(folio);
 			char log_msg[MAX_LOG_MSG_LEN];
 			unsigned long va = lookup_va(pfn);
-			snprintf(log_msg, sizeof(log_msg), 
-				"reclaim: pfn = %lx, va = %lx, nr_pages = %u, NUMA node = %d, type = %s\n", 
-				pfn, va, nr_pages, pfn_to_nid(pfn), folio_list_type);
 			remove_pa_va_mapping(pfn);
-			write_swap_log(log_msg);
+			if (swap_log_ctl.start_write_log) {
+				snprintf(log_msg, sizeof(log_msg), 
+					"reclaim: pfn = %lx, va = %lx, nr_pages = %u, NUMA node = %d, type = %s\n", 
+					pfn, va, nr_pages, pfn_to_nid(pfn), folio_list_type);
+				write_swap_log(log_msg);
+			}
 		}
 		// add by lsc end
 

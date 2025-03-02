@@ -38,6 +38,7 @@ struct reclaim_stat {
 struct swap_log_control
 {
 	bool enable_swap_log;
+	bool start_write_log;
 	long pa_va_ht_size_max;
 };
 // add by lsc end

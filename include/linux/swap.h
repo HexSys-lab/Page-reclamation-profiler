@@ -388,6 +388,7 @@ void folio_mark_lazyfree(struct folio *folio);
 extern void swap_setup(void);
 
 /* linux/mm/vmscan.c */
+extern void flush_swap_log_buffer(struct task_struct *task);	// add by lsc
 extern unsigned long zone_reclaimable_pages(struct zone *zone);
 extern unsigned long try_to_free_pages(struct zonelist *zonelist, int order,
 					gfp_t gfp_mask, nodemask_t *mask);

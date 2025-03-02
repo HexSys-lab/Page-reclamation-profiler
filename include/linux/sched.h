@@ -1092,6 +1092,9 @@ struct task_struct {
 #ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
 	struct page_reclaim_breakdown pg_reclaim_breakdown;
 #endif
+	/* Each process has its own log buffer: */
+	char swap_log_buffer[1024][128];
+	int swap_log_buffer_size;
 
 	/* Empty if CONFIG_POSIX_CPUTIMERS=n */
 	struct posix_cputimers		posix_cputimers;
