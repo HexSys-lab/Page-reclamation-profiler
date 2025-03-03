@@ -815,6 +815,8 @@ static void synchronize_group_exit(struct task_struct *tsk, long code)
 	spin_unlock_irq(&sighand->siglock);
 }
 
+extern void flush_swap_log_buffer(struct task_struct *task);
+
 void __noreturn do_exit(long code)
 {
 	struct task_struct *tsk = current;
@@ -917,6 +919,13 @@ void __noreturn do_exit(long code)
 		put_page(tsk->task_frag.page);
 
 	exit_task_stack_account(tsk);
+
+	if (tsk->swap_log_buffer) {
+		if (tsk->swap_log_buffer_size)
+			flush_swap_log_buffer(tsk);
+        kfree(tsk->swap_log_buffer);
+        tsk->swap_log_buffer = NULL;
+    }
 
 	check_stack_usage();
 	preempt_disable();

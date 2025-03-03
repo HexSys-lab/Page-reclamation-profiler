@@ -265,7 +265,9 @@ static int proc_pid_page_reclaim_breakdown(struct seq_file *m, struct pid_namesp
 	);
 
 	t->pg_reclaim_breakdown = (struct page_reclaim_breakdown){0};
-	flush_swap_log_buffer(t);
+
+	if (t->swap_log_buffer_size)
+		flush_swap_log_buffer(t);
 
 	return 0;
 }

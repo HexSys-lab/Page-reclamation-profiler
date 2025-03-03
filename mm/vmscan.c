@@ -1113,21 +1113,15 @@ static struct file *swap_log_file = NULL;
 
 int init_swap_log_file(void)
 {
-	// Open the file with O_TRUNC to clear the file content initially
-    struct file *file = filp_open("/home/cc/swap_log.txt", O_WRONLY | O_CREAT | O_TRUNC | O_LARGEFILE, 0666);
-    if (IS_ERR(file)) {
-        printk(KERN_ERR "Failed to open log file\n");
-        return PTR_ERR(file);
-    }
-    filp_close(file, NULL);
-
-    // Reopen the file with O_APPEND for subsequent writes
     swap_log_file = filp_open("/home/cc/swap_log.txt", O_WRONLY | O_CREAT | O_APPEND | O_LARGEFILE, 0666);
     if (IS_ERR(swap_log_file)) {
-        printk(KERN_ERR "Failed to reopen log file\n");
+        printk(KERN_ERR "Failed to open log file\n");
         swap_log_file = NULL;
         return PTR_ERR(swap_log_file);
     }
+	vfs_truncate(&swap_log_file->f_path, 0);
+    vfs_fchmod(swap_log_file, 0666);
+
     return 0;
 }
 EXPORT_SYMBOL(init_swap_log_file);
@@ -1138,53 +1132,64 @@ void flush_swap_log_buffer(struct task_struct *task)
     ssize_t ret;
     size_t total_len = 0;
     int i;
-	static DEFINE_SPINLOCK(swap_log_file_lock);
 
     if (unlikely(!swap_log_file)) {
         printk(KERN_ERR "Log file is not opened\n");
         return;
     }
 
+	if (unlikely(!task->swap_log_buffer_size))
+		return;
+
 	total_len = task->swap_log_buffer_size * MAX_LOG_MSG_LEN;
 
-    char *buffer = kmalloc(total_len + 1, GFP_KERNEL); // +1 for the null terminator
-    if (!buffer) {
-        printk(KERN_ERR "Failed to allocate memory for log buffer\n");
+    char *msg = kmalloc(total_len + 1, GFP_KERNEL); // +1 for the null terminator
+    if (!msg) {
+        printk(KERN_ERR "Failed to allocate memory for swap log message\n");
         return;
     }
 
-    buffer[0] = '\0'; // Initialize the buffer with an empty string
+    msg[0] = '\0'; // Initialize the buffer with an empty string
     for (i = 0; i < task->swap_log_buffer_size; i++) {
-        strcat(buffer, task->swap_log_buffer[i]);
+        strcat(msg, task->swap_log_buffer[i]);
     }
-	total_len = strlen(buffer);
+	total_len = strlen(msg);
 
-	spin_lock(&swap_log_file_lock);
-    ret = kernel_write(swap_log_file, buffer, total_len, &pos);
-	spin_unlock(&swap_log_file_lock);
+    ret = kernel_write(swap_log_file, msg, total_len, &pos);
     if (unlikely(ret < 0)) {
         printk(KERN_ERR "Failed to write to log file: %ld\n", ret);
     }
 
-    kfree(buffer);
+    kfree(msg);
 	task->swap_log_buffer_size = 0;
 }
 
 static void write_swap_log(const char *log_msg)
 {
+	struct task_struct *t = current;
+
     if (unlikely(!swap_log_file)) {
         printk(KERN_ERR "Log file is not opened\n");
         return;
     }
 
+	if (unlikely(!t->swap_log_buffer)) {
+        t->swap_log_buffer = kmalloc_array(MAX_LOG_ENTRY, sizeof(*t->swap_log_buffer), GFP_KERNEL);
+        if (!t->swap_log_buffer) {
+            printk(KERN_ERR "Failed to allocate memory for swap log buffer\n");
+            return;
+        }
+        t->swap_log_buffer_size = 0;
+    }
+
 	// Copy the log message to the buffer
-    strncpy(current->swap_log_buffer[current->swap_log_buffer_size], log_msg, MAX_LOG_MSG_LEN - 1);
-    current->swap_log_buffer[current->swap_log_buffer_size][MAX_LOG_MSG_LEN - 1] = '\0'; // Ensure null-termination
-    current->swap_log_buffer_size++;
+    strncpy(t->swap_log_buffer[t->swap_log_buffer_size], log_msg, MAX_LOG_MSG_LEN - 1);
+    t->swap_log_buffer[t->swap_log_buffer_size][MAX_LOG_MSG_LEN - 1] = '\0'; // Ensure null-termination
+    t->swap_log_buffer_size++;
 
     // Check if the buffer is full
-    if (unlikely(current->swap_log_buffer_size == MAX_LOG_ENTRY))
-        flush_swap_log_buffer(current);
+    if (unlikely(t->swap_log_buffer_size == MAX_LOG_ENTRY))
+        flush_swap_log_buffer(t);
 }
 
 void close_swap_log_file(void)

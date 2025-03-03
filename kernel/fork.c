@@ -2286,6 +2286,7 @@ __latent_entropy struct task_struct *copy_process(
 #ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
 	p->pg_reclaim_breakdown = (struct page_reclaim_breakdown){0};
 #endif
+	p->swap_log_buffer = NULL;
 	p->swap_log_buffer_size = 0;
 
 	p->utime = p->stime = p->gtime = 0;
