@@ -92,7 +92,7 @@ struct pa_va_entry {
     struct hlist_node hnode_pfn;
 };
 
-#define PA_VA_HASH_BITS 20
+#define PA_VA_HASH_BITS 22
 DEFINE_HASHTABLE(pa_va_table, PA_VA_HASH_BITS);
 atomic_long_t pa_va_ht_size = ATOMIC_LONG_INIT(0);
 
@@ -1108,7 +1108,8 @@ static bool may_enter_fs(struct folio *folio, gfp_t gfp_mask)
 
 // add by lsc, only used for write swap log
 static struct file *swap_log_file = NULL;
-#define MAX_LOG_ENTRY	1024
+int max_log_entry = 512;
+EXPORT_SYMBOL(max_log_entry);
 #define MAX_LOG_MSG_LEN 128
 
 int init_swap_log_file(void)
@@ -1174,7 +1175,7 @@ static void write_swap_log(const char *log_msg)
     }
 
 	if (unlikely(!t->swap_log_buffer)) {
-        t->swap_log_buffer = kmalloc_array(MAX_LOG_ENTRY, sizeof(*t->swap_log_buffer), GFP_KERNEL);
+        t->swap_log_buffer = kmalloc_array((size_t)max_log_entry, sizeof(*t->swap_log_buffer), GFP_KERNEL);
         if (!t->swap_log_buffer) {
             printk(KERN_ERR "Failed to allocate memory for swap log buffer\n");
             return;
@@ -1188,7 +1189,7 @@ static void write_swap_log(const char *log_msg)
     t->swap_log_buffer_size++;
 
     // Check if the buffer is full
-    if (unlikely(t->swap_log_buffer_size == MAX_LOG_ENTRY))
+    if (unlikely(t->swap_log_buffer_size == max_log_entry))
         flush_swap_log_buffer(t);
 }
 
@@ -1609,12 +1610,18 @@ retry:
 
 #ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
 			current->pg_reclaim_breakdown.rmap_cond_resched_cycles = 0;
+			current->pg_reclaim_breakdown.special_function_timestamp = rdtsc();
 #endif
 			try_to_unmap(folio, flags);		//where PA-VA mapping is recorded
 #ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
-			if (!ignore_references)
+			if (!ignore_references){
 				current->pg_reclaim_breakdown.stage_5_cycles -= current->pg_reclaim_breakdown.rmap_cond_resched_cycles;
-			current->pg_reclaim_breakdown.rmap_cond_resched_cycles = 0;
+				current->pg_reclaim_breakdown.unmap_cycles += rdtsc() -
+					current->pg_reclaim_breakdown.special_function_timestamp -
+					current->pg_reclaim_breakdown.rmap_cond_resched_cycles;
+				current->pg_reclaim_breakdown.rmap_cond_resched_cycles = 0;
+				current->pg_reclaim_breakdown.nr_pg_unmap++;
+			}
 #endif
 			if (folio_mapped(folio)) {
 				stat->nr_unmap_fail += nr_pages;
@@ -1705,12 +1712,16 @@ retry:
 			 */
 			try_to_unmap_flush_dirty();
 #ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
+			current->pg_reclaim_breakdown.special_function_timestamp = rdtsc();
 			pageout_t pgout_result = pageout(folio, mapping, &plug);
 			if (!ignore_references) {
 				profile_timestamp = rdtsc();
 				current->pg_reclaim_breakdown.stage_5_cycles += profile_timestamp -
 					current->pg_reclaim_breakdown.last_timestamp;
-				current->pg_reclaim_breakdown.last_timestamp = profile_timestamp;				
+				current->pg_reclaim_breakdown.pageout_cycles += profile_timestamp -
+					current->pg_reclaim_breakdown.special_function_timestamp;
+				current->pg_reclaim_breakdown.last_timestamp = profile_timestamp;
+				current->pg_reclaim_breakdown.nr_pg_pageout++;
 			}
 			switch(pgout_result) {
 #else

@@ -89,6 +89,7 @@ struct page_reclaim_breakdown {
 	unsigned long long rmap_cond_resched_cycles;	// not accumulative
 	unsigned long long cond_resched_cycles;		// not accumulative
 	unsigned long long nr_pg_move_young_tmp;	// not accumulative
+	unsigned long long special_function_timestamp;	// used by func-specific cycles
 
 	// time breakdown
 	unsigned long long stage_2_cycles;
@@ -97,6 +98,12 @@ struct page_reclaim_breakdown {
 	unsigned long long stage_5_cycles;
 	unsigned long long stage_6_cycles;
 	unsigned long long clean_up_cycles;
+
+	// function-specific cycles & nr_pg
+	unsigned long long unmap_cycles;
+	unsigned long long pageout_cycles;	// if this value is small, we know page out is done asynchronously, and can remove this field
+	unsigned long long nr_pg_unmap;
+	unsigned long long nr_pg_pageout;
 
 	// page operation number breakdown
 	// before reclaim
