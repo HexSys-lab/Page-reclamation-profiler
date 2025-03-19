@@ -1917,7 +1917,7 @@ free_it:
 #ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
 		if (!ignore_references)
 			current->pg_reclaim_breakdown.stage_6_cycles += rdtsc() -
-				current->pg_reclaim_breakdown.last_timestamp;	// end of stage 6
+				current->pg_reclaim_breakdown.last_timestamp;
 #endif
 		continue;
 
@@ -1950,7 +1950,7 @@ activate_locked:
 		}
 #ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
 		if (!ignore_references)
-			current->pg_reclaim_breakdown.clean_up_cycles += rdtsc() -
+			current->pg_reclaim_breakdown.stage_6_cycles += rdtsc() -
 				current->pg_reclaim_breakdown.last_timestamp;
 #endif
 keep_locked:
@@ -1968,15 +1968,6 @@ keep:
 #endif
 	/* Migrate folios selected for demotion */
 	nr_reclaimed += demote_folio_list(&demote_folios, pgdat);
-
-#ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
-	if (!ignore_references) {
-		profile_timestamp = rdtsc();
-		current->pg_reclaim_breakdown.stage_6_cycles += profile_timestamp -
-			current->pg_reclaim_breakdown.last_timestamp;
-		current->pg_reclaim_breakdown.last_timestamp = profile_timestamp;	// demotion is equivalent to freeing
-	}
-#endif
 
 	/* Folios that could not be demoted are still in @demote_folios */
 	if (!list_empty(&demote_folios)) {
@@ -2003,7 +1994,7 @@ keep:
 			do_demote_pass = false;
 #ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
 			if (!ignore_references)
-				current->pg_reclaim_breakdown.clean_up_cycles += rdtsc() -
+				current->pg_reclaim_breakdown.stage_6_cycles += rdtsc() -
 					current->pg_reclaim_breakdown.last_timestamp;
 #endif
 			goto retry;
@@ -2015,6 +2006,13 @@ keep:
 	mem_cgroup_uncharge_folios(&free_folios);
 	try_to_unmap_flush();
 	free_unref_folios(&free_folios);
+
+	list_splice(&ret_folios, folio_list);
+	count_vm_events(PGACTIVATE, pgactivate);
+
+	if (plug)
+		swap_write_unplug(plug);
+
 #ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
 	if (!ignore_references) {
 		current->pg_reclaim_breakdown.stage_6_cycles += rdtsc() -
@@ -2022,12 +2020,6 @@ keep:
 		current->pg_reclaim_breakdown.nr_pg_move_young_tmp = pgactivate;
 	}
 #endif
-
-	list_splice(&ret_folios, folio_list);
-	count_vm_events(PGACTIVATE, pgactivate);
-
-	if (plug)
-		swap_write_unplug(plug);
 
 	return nr_reclaimed;
 }
@@ -2452,7 +2444,7 @@ static unsigned long shrink_inactive_list(unsigned long nr_to_scan,
 
 #ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
 	profile_timestamp = rdtsc();
-	current->pg_reclaim_breakdown.clean_up_cycles += profile_timestamp -
+	current->pg_reclaim_breakdown.stage_6_cycles += profile_timestamp -
 		current->pg_reclaim_breakdown.last_timestamp;
 	current->pg_reclaim_breakdown.last_timestamp = profile_timestamp;
 #endif
@@ -2506,16 +2498,12 @@ static unsigned long shrink_inactive_list(unsigned long nr_to_scan,
 	__count_vm_events(PGSTEAL_ANON + file, nr_reclaimed);
 	spin_unlock_irq(&lruvec->lru_lock);
 
-#ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
-	profile_timestamp = rdtsc();
-	current->pg_reclaim_breakdown.clean_up_cycles += profile_timestamp -
-		current->pg_reclaim_breakdown.last_timestamp;
-	current->pg_reclaim_breakdown.last_timestamp = profile_timestamp;
-#endif
 	lru_note_cost(lruvec, file, stat.nr_pageout, nr_scanned - nr_reclaimed);
 #ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
-	current->pg_reclaim_breakdown.stage_3_cycles += rdtsc() -
-		current->pg_reclaim_breakdown.last_timestamp;	// no stage 2 in 2QLRU
+	current->pg_reclaim_breakdown.stage_6_cycles += rdtsc() -
+		current->pg_reclaim_breakdown.last_timestamp;
+	// we don't profile cycles spent on stage 6 after this line
+	// as the time spent should be negligible
 #endif
 
 	/*
@@ -2544,9 +2532,6 @@ static unsigned long shrink_inactive_list(unsigned long nr_to_scan,
 			reclaim_throttle(pgdat, VMSCAN_THROTTLE_WRITEBACK);
 	}
 
-#ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
-	current->pg_reclaim_breakdown.last_timestamp = rdtsc();
-#endif
 	sc->nr.dirty += stat.nr_dirty;
 	sc->nr.congested += stat.nr_congested;
 	sc->nr.unqueued_dirty += stat.nr_unqueued_dirty;
@@ -2558,11 +2543,6 @@ static unsigned long shrink_inactive_list(unsigned long nr_to_scan,
 
 	trace_mm_vmscan_lru_shrink_inactive(pgdat->node_id,
 			nr_scanned, nr_reclaimed, &stat, sc->priority, file);
-#ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
-	current->pg_reclaim_breakdown.clean_up_cycles += rdtsc() -
-		current->pg_reclaim_breakdown.last_timestamp;
-#endif
-
 	return nr_reclaimed;
 }
 
@@ -2608,7 +2588,7 @@ static void shrink_active_list(unsigned long nr_to_scan,
 
 #ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
 	profile_timestamp = rdtsc();
-	current->pg_reclaim_breakdown.clean_up_cycles += profile_timestamp -
+	current->pg_reclaim_breakdown.stage_6_cycles += profile_timestamp -
 		current->pg_reclaim_breakdown.last_timestamp;
 	current->pg_reclaim_breakdown.last_timestamp = profile_timestamp;
 #endif
@@ -5327,7 +5307,7 @@ retry:
 	list_splice_init(&clean, &list);	// second try on isolated pages
 
 #ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
-	current->pg_reclaim_breakdown.clean_up_cycles += rdtsc() -
+	current->pg_reclaim_breakdown.stage_6_cycles += rdtsc() -
 		current->pg_reclaim_breakdown.last_timestamp;
 #endif
 
@@ -5494,7 +5474,7 @@ static bool try_to_shrink_lruvec(struct lruvec *lruvec, struct scan_control *sc)
 #ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
 		current->pg_reclaim_breakdown.last_timestamp = rdtsc();
 		bool abort_ret = should_abort_scan(lruvec, sc);
-		current->pg_reclaim_breakdown.clean_up_cycles += rdtsc() -
+		current->pg_reclaim_breakdown.stage_6_cycles += rdtsc() -
 			current->pg_reclaim_breakdown.last_timestamp;
 		if (abort_ret)
 #else
@@ -5635,7 +5615,7 @@ static void lru_gen_shrink_lruvec(struct lruvec *lruvec, struct scan_control *sc
 	lru_add_drain();
 
 #ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
-	current->pg_reclaim_breakdown.clean_up_cycles += rdtsc() -
+	current->pg_reclaim_breakdown.stage_6_cycles += rdtsc() -
 		current->pg_reclaim_breakdown.last_timestamp;
 #endif
 
@@ -5695,7 +5675,7 @@ static void lru_gen_shrink_node(struct pglist_data *pgdat, struct scan_control *
 	lru_add_drain();
 
 #ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
-	current->pg_reclaim_breakdown.clean_up_cycles += rdtsc() -
+	current->pg_reclaim_breakdown.stage_6_cycles += rdtsc() -
 		current->pg_reclaim_breakdown.last_timestamp;
 #endif
 

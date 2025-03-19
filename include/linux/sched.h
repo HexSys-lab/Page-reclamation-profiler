@@ -92,12 +92,11 @@ struct page_reclaim_breakdown {
 	unsigned long long special_function_timestamp;	// used by func-specific cycles
 
 	// time breakdown
-	unsigned long long stage_2_cycles;
-	unsigned long long stage_3_cycles;
-	unsigned long long stage_4_cycles;
-	unsigned long long stage_5_cycles;
-	unsigned long long stage_6_cycles;
-	unsigned long long clean_up_cycles;
+	unsigned long long stage_2_cycles;	// PTW cycles of MGLRU are seperate from stage 2
+	unsigned long long stage_3_cycles;	// stage 2 in the latest paper's stage division
+	unsigned long long stage_4_cycles;	// stage 3 in the latest paper's stage division
+	unsigned long long stage_5_cycles;	// stage 4 in the latest paper's stage division
+	unsigned long long stage_6_cycles;	// stage 5 in the latest paper's stage division
 
 	// function-specific cycles & nr_pg
 	unsigned long long unmap_cycles;
