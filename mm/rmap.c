@@ -84,12 +84,11 @@
 
 #include "internal.h"
 
-//add by lsc
+// profiler APIs
 #include <linux/vmstat.h>
 extern struct mem_cgroup *swap_log_memcg;
 extern struct swap_log_control swap_log_ctl;
 extern int add_or_update_pa_va_mapping(unsigned long pfn, unsigned long va);
-//add by lsc end
 
 static struct kmem_cache *anon_vma_cachep;
 static struct kmem_cache *anon_vma_chain_cachep;
@@ -1698,12 +1697,10 @@ static bool try_to_unmap_one(struct folio *folio, struct vm_area_struct *vma,
 		subpage = folio_page(folio, pfn - folio_pfn(folio));
 		address = pvmw.address;
 
-		// add by lsc
 		if (swap_log_ctl.enable_swap_log && swap_log_memcg && (swap_log_memcg == folio_memcg(folio))) {
 			if (unlikely(add_or_update_pa_va_mapping(pfn, address)<0))
 				printk("add_or_update_pa_va_mapping failed\n");
 		}
-		// add by lsc end
 
 		anon_exclusive = folio_test_anon(folio) &&
 				 PageAnonExclusive(subpage);

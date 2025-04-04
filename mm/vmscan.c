@@ -70,7 +70,6 @@
 #define CREATE_TRACE_POINTS
 #include <trace/events/vmscan.h>
 
-// add by lsc
 #include <linux/hashtable.h>
 #include <linux/slab.h>
 #include <linux/kernel.h>
@@ -169,7 +168,6 @@ void clear_pa_va_table(void)
 	atomic_long_set(&pa_va_ht_size, 0);
 }
 EXPORT_SYMBOL(clear_pa_va_table);
-// add by lsc end
 
 struct scan_control {
 	/* How many pages shrink_list() should reclaim */
@@ -1106,7 +1104,7 @@ static bool may_enter_fs(struct folio *folio, gfp_t gfp_mask)
 	return !data_race(folio_swap_flags(folio) & SWP_FS_OPS);
 }
 
-// add by lsc, only used for write swap log
+// code region for write swap log
 static struct file *swap_log_file = NULL;
 int max_log_entry = 512;
 EXPORT_SYMBOL(max_log_entry);
@@ -1201,7 +1199,7 @@ void close_swap_log_file(void)
     }
 }
 EXPORT_SYMBOL(close_swap_log_file);
-// add by lsc end
+// swap log region end
 
 /*
  * shrink_folio_list() returns the number of reclaimed pages
@@ -1227,7 +1225,6 @@ static unsigned int shrink_folio_list(struct list_head *folio_list,
 	cond_resched();
 	do_demote_pass = can_demote(pgdat->node_id, sc);
 
-	// add by lsc
 	if (unlikely(!swap_log_memcg && swap_log_cgroup)) {
 		struct cgroup_subsys_state *swap_log_css = get_cgroup_css(swap_log_cgroup, &memory_cgrp_subsys);
 		if (swap_log_css)
@@ -1245,7 +1242,6 @@ static unsigned int shrink_folio_list(struct list_head *folio_list,
 		else
 			folio_list_type = "anon";
 	}
-	// add by lsc end
 
 retry:
 	while (!list_empty(folio_list)) {
@@ -1886,7 +1882,6 @@ free_it:
 		 */
 		nr_reclaimed += nr_pages;
 
-		// add by lsc
         if (swap_log_flag) {
 			//don't use folio_test_anon as the mapping has been cleared
             unsigned long pfn = folio_pfn(folio);
@@ -1900,7 +1895,6 @@ free_it:
 				write_swap_log(log_msg);
 			}
 		}
-		// add by lsc end
 
 #ifdef CONFIG_PAGE_RECLAIM_TIME_BREAKDOWN
 		if (!ignore_references)

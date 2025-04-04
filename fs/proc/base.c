@@ -226,7 +226,7 @@ static int proc_pid_page_reclaim_breakdown(struct seq_file *m, struct pid_namesp
 		"stage_3_cycles: %llu\t"
 		"stage_4_cycles: %llu\t"
 		"stage_5_cycles: %llu\t"
-		"stage_6_cycles: %llu\t"
+		"stage_6_cycles: %llu\n"
 
 		"Function-specific cycles and counts\n"
 		"unmap_cycles: %llu\t"

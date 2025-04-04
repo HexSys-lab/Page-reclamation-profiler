@@ -494,7 +494,7 @@ static struct cgroup_subsys_state *cgroup_css(struct cgroup *cgrp,
 		return &cgrp->self;
 }
 
-// add by lsc, only used for swap log
+// only used for swap log
 struct cgroup_subsys_state *get_cgroup_css(struct cgroup *cgrp, struct cgroup_subsys *ss) {
     struct cgroup_subsys_state *css;
 
@@ -5740,7 +5740,7 @@ fail:
 	return ret;
 }
 
-// add by lsc
+// used by profiler
 struct cgroup * swap_log_cgroup = NULL;
 
 int cgroup_mkdir(struct kernfs_node *parent_kn, const char *name, umode_t mode)
@@ -5794,7 +5794,7 @@ out_destroy:
 out_unlock:
 	cgroup_kn_unlock(parent_kn);
 
-	// add by lsc
+	// change this to specify a different cgroup
     if (strcmp(name, "swap_log") == 0)
 		swap_log_cgroup = cgrp;
 
