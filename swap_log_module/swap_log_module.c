@@ -101,5 +101,5 @@ module_init(swap_log_module_init);
 module_exit(swap_log_module_exit);
 
 MODULE_LICENSE("GPL");
-MODULE_AUTHOR("Shaochang Liu");
+MODULE_AUTHOR("Anon");
 MODULE_DESCRIPTION("A kernel module to interface with swap_log_ctl via proc filesystem.");
