@@ -1,1 +1,10 @@
 A lightweight page reclaim profiling tool integrated into Linux kernel v6.9.0
+
+You can find major changes in the following files, and then further locate related helper functions/structures of our profiler.
+- fs/proc/base.c
+- kernel/cgroup/cgroup.c
+- mm/rmap.c
+- mm/vmscan.c
+
+We also provide a sample profiler control interface that is implemented as a kernel module for users who want to test our tool.
+- swap_log_module/
