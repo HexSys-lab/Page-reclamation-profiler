@@ -90,3 +90,17 @@ For more details, please refer to our paper, comments in the code, and commit me
 
 We also provide a sample profiler control interface that is implemented as a kernel module for researchers who want to test our tool:
 - `swap_log_module/`
+
+## Cite this tool
+```bash
+@unpublished{liu2025assessing,
+  author = {Shaochang Liu and Jie Ren},
+  title = {Assessing Page Reclamation Mechanisms for Linux},
+  year = {2025},
+  month = nov,
+  note = {Workshops of the International Conference for High Performance Computing, Networking, Storage and Analysis (SC Workshops ’25), November 16–21, 2025, St Louis, MO, USA},
+  publisher = {ACM},
+  doi = {10.1145/3731599.3767537},
+  url = {https://doi.org/10.1145/3731599.3767537}
+}
+```
